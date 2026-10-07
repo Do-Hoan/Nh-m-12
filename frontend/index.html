@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chat App</title>
+<style>
+  *{box-sizing:border-box;margin:0}
+  html,body{height:100%}
+  body{font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;color:#1c2430;background:#fff}
+  .hidden{display:none!important}
+  input,button{font:inherit;padding:9px 12px;border-radius:6px;border:1px solid #c5ccd6}
+  input:focus-visible,button:focus-visible{outline:2px solid #2b6cf6;outline-offset:1px}
+  button{background:#2b6cf6;color:#fff;border-color:#2b6cf6;cursor:pointer}
+  button.ghost{background:transparent;color:inherit;border-color:#c5ccd6}
+
+  #auth{height:100%;display:grid;place-items:center;background:#eef1f6}
+  #authForm{background:#fff;padding:28px;border-radius:10px;width:min(340px,92vw);display:flex;flex-direction:column;gap:10px;border:1px solid #d8dde6}
+  #authForm h1{font-size:22px;margin-bottom:4px}
+  #err{color:#c62828;font-size:14px;min-height:20px}
+
+  #app{height:100%;display:flex}
+  aside{width:260px;flex:none;background:#1f2937;color:#c9d1dc;overflow-y:auto}
+  aside h2{padding:16px 16px 6px;font-size:13px;font-weight:600;color:#8b97a8;display:flex;justify-content:space-between;align-items:center}
+  aside h2 button{padding:0 8px;font-size:16px;line-height:22px}
+  .me{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:1px solid #2f3b4c;color:#fff;font-weight:600}
+  .me button{padding:3px 10px;color:#c9d1dc;border-color:#3d4a5e}
+  .item{padding:7px 16px;cursor:pointer;display:flex;justify-content:space-between;align-items:center}
+  .item:hover{background:#2a3546}
+  .item.active{background:#2b6cf6;color:#fff}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#556377;margin-right:9px}
+  .dot.on{background:#34d399}
+  .badge{background:#ef4444;color:#fff;border-radius:10px;font-size:12px;padding:0 7px}
+  .empty{padding:4px 16px;color:#6f7c8f;font-size:13px}
+
+  main{flex:1;display:flex;flex-direction:column;min-width:0}
+  header{padding:14px 20px;border-bottom:1px solid #e1e5eb;display:flex;justify-content:space-between;align-items:center;font-weight:600}
+  #status{font-weight:400;font-size:13px;color:#6b7686}
+  #more{margin:10px auto 0;padding:4px 14px;font-size:13px}
+  #msgs{flex:1;overflow-y:auto;padding:14px 20px}
+  .msg{margin-bottom:12px;max-width:75ch}
+  .msg b{margin-right:8px}
+  .msg small{color:#8b95a4}
+  .msg p{white-space:pre-wrap;overflow-wrap:anywhere}
+  #composer{display:flex;gap:8px;padding:12px 20px;border-top:1px solid #e1e5eb}
+  #composer input{flex:1}
+  .placeholder{margin:auto;color:#8b95a4}
+
+  @media (max-width:640px){aside{width:190px}}
+</style>
+</head>
+<body>
+
+<div id="auth">
+  <form id="authForm">
+    <h1>Chat App</h1>
+    <input id="username" placeholder="Tên đăng nhập" autocomplete="username" required>
+    <input id="password" type="password" placeholder="Mật khẩu (tối thiểu 6 ký tự)" autocomplete="current-password" required>
+    <div id="err" role="alert"></div>
+    <button type="submit">Đăng nhập</button>
+    <button type="button" class="ghost" id="registerBtn">Tạo tài khoản</button>
+  </form>
+</div>
+
+<div id="app" class="hidden">
+  <aside>
+    <div class="me"><span id="meName"></span><button class="ghost" id="logoutBtn">Thoát</button></div>
+    <h2>Kênh <button id="newChannel" title="Tạo kênh mới">+</button></h2>
+    <div id="channels"></div>
+    <h2>Kênh công khai chưa tham gia</h2>
+    <div id="others"></div>
+    <h2>Tin nhắn riêng</h2>
+    <div id="users"></div>
+  </aside>
+  <main>
+    <header><span id="roomTitle">Chọn một cuộc trò chuyện</span><span id="status"></span></header>
+    <button id="more" class="ghost hidden">Tải tin cũ hơn</button>
+    <div id="msgs"><div class="placeholder">Chọn kênh hoặc một người ở cột bên trái để bắt đầu.</div></div>
+    <form id="composer" class="hidden">
+      <input id="text" placeholder="Nhập tin nhắn" autocomplete="off" maxlength="2000">
+      <button type="submit">Gửi</button>
+    </form>
+  </main>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let token = localStorage.getItem("token");
+let me = null, rooms = [], publicRooms = [], users = [];
+let current = null, ws = null, retry = 0, lost = false, hasMore = false;
+const online = new Set(), unread = {};
+const PAGE = 30;
+
+/* ---------- REST ---------- */
+async function api(path, method = "GET", body) {
+  const res = await fetch(path, {
+    method,
+    headers: { "Content-Type": "application/json", ...(token && { Authorization: "Bearer " + token }) },
+    body: body && JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    if (res.status === 401 && token) logout();
+    throw new Error(typeof data.detail === "string" ? data.detail : "Dữ liệu không hợp lệ");
+  }
+  return data;
+}
+
+/* ---------- Đăng nhập / đăng ký ---------- */
+async function auth(kind) {
+  try {
+    const d = await api("/api/auth/" + kind, "POST",
+      { username: $("username").value.trim(), password: $("password").value });
+    token = d.access_token;
+    localStorage.setItem("token", token);
+    me = d.user;
+    $("err").textContent = "";
+    start();
+  } catch (e) { $("err").textContent = e.message; }
+}
+$("authForm").onsubmit = e => { e.preventDefault(); auth("login"); };
+$("registerBtn").onclick = () => auth("register");
+$("logoutBtn").onclick = logout;
+
+function logout() {
+  if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  token = null; me = null; current = null;
+  localStorage.removeItem("token");
+  $("app").classList.add("hidden");
+  $("auth").classList.remove("hidden");
+}
+
+async function start() {
+  $("auth").classList.add("hidden");
+  $("app").classList.remove("hidden");
+  $("meName").textContent = me.username;
+  connect();
+  await refreshSidebar();
+}
+
+/* ---------- WebSocket ---------- */
+function connect() {
+  if (!token) return;
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${proto}://${location.host}/ws?token=${encodeURIComponent(token)}`);
+  ws.onopen = () => {
+    retry = 0;
+    $("status").textContent = "Đã kết nối";
+    if (lost) { lost = false; refreshSidebar(); if (current) openRoom(current); } // đồng bộ tin bị lỡ
+  };
+  ws.onmessage = e => onEvent(JSON.parse(e.data));
+  ws.onclose = e => {
+    if (e.code === 4401) return logout();
+    lost = true;
+    online.clear(); renderSidebar();
+    $("status").textContent = "Mất kết nối, đang thử lại...";
+    setTimeout(connect, Math.min(1000 * 2 ** retry++, 15000)); // exponential backoff
+  };
+}
+
+async function onEvent(ev) {
+  if (ev.type === "presence.list") {
+    online.clear(); ev.users.forEach(u => online.add(u)); renderSidebar();
+  } else if (ev.type === "presence.update") {
+    ev.status === "online" ? online.add(ev.username) : online.delete(ev.username);
+    renderSidebar();
+  } else if (ev.type === "message.new") {
+    if (!rooms.some(r => r.id === ev.room_id)) await refreshSidebar(); // DM mới từ người khác
+    if (current && current.id === ev.room_id) addMessage(ev);
+    else { unread[ev.room_id] = (unread[ev.room_id] || 0) + 1; renderSidebar(); }
+  } else if (ev.type === "error") {
+    alert(ev.detail);
+  }
+}
+
+/* ---------- Sidebar ---------- */
+async function refreshSidebar() {
+  [rooms, publicRooms, users] = await Promise.all(
+    [api("/api/rooms"), api("/api/rooms/public"), api("/api/users")]);
+  renderSidebar();
+}
+
+function row(label, { room, dot, onclick }) {
+  const el = document.createElement("div");
+  el.className = "item" + (room && current && room.id === current.id ? " active" : "");
+  const left = document.createElement("span");
+  if (dot !== undefined) {
+    const d = document.createElement("i");
+    d.className = "dot" + (dot ? " on" : "");
+    left.append(d);
+  }
+  left.append(label);
+  el.append(left);
+  if (room && unread[room.id]) {
+    const b = document.createElement("span");
+    b.className = "badge"; b.textContent = unread[room.id];
+    el.append(b);
+  }
+  el.onclick = onclick || (() => openRoom(room));
+  return el;
+}
+
+function emptyNote(text) {
+  const d = document.createElement("div");
+  d.className = "empty"; d.textContent = text;
+  return d;
+}
+
+function renderSidebar() {
+  const joined = rooms.filter(r => r.type === "channel");
+  const others = publicRooms.filter(r => !r.joined);
+  $("channels").replaceChildren(...joined.map(r => row("# " + r.name, { room: r })));
+  $("others").replaceChildren(...(others.length
+    ? others.map(r => row("# " + r.name, { onclick: () => joinRoom(r.id) }))
+    : [emptyNote("Không có kênh nào khác")]));
+  $("users").replaceChildren(...(users.length
+    ? users.map(u => {
+        const dm = rooms.find(r => r.type === "dm" && r.name === u);
+        return row(u, { room: dm, dot: online.has(u), onclick: () => openDM(u) });
+      })
+    : [emptyNote("Chưa có người dùng khác")]));
+}
+
+async function joinRoom(id) {
+  await api(`/api/rooms/${id}/join`, "POST");
+  await refreshSidebar();
+  openRoom(rooms.find(r => r.id === id));
+}
+async function openDM(username) {
+  const r = await api("/api/rooms/dm", "POST", { username });
+  if (!rooms.some(x => x.id === r.id)) rooms.push(r);
+  openRoom(r);
+}
+$("newChannel").onclick = async () => {
+  const name = prompt("Tên kênh (chữ thường, số, - hoặc _):");
+  if (!name) return;
+  try {
+    const r = await api("/api/rooms", "POST", { name: name.trim() });
+    await refreshSidebar();
+    openRoom(rooms.find(x => x.id === r.id));
+  } catch (e) { alert(e.message); }
+};
+
+/* ---------- Khung chat ---------- */
+function msgEl(m) {
+  const el = document.createElement("div");
+  el.className = "msg"; el.dataset.id = m.id;
+  const name = document.createElement("b"); name.textContent = m.sender.username;
+  const time = document.createElement("small");
+  time.textContent = new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const text = document.createElement("p"); text.textContent = m.content; // textContent -> chống XSS
+  el.append(name, time, text);
+  return el;
+}
+
+function addMessage(m) {
+  const box = $("msgs");
+  const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  box.append(msgEl(m));
+  if (nearBottom || m.sender.username === me.username) box.scrollTop = box.scrollHeight;
+}
+
+async function openRoom(room) {
+  current = room;
+  unread[room.id] = 0;
+  $("roomTitle").textContent = (room.type === "dm" ? "@ " : "# ") + room.name;
+  $("composer").classList.remove("hidden");
+  const list = await api(`/api/rooms/${room.id}/messages?limit=${PAGE}`);
+  if (current !== room) return; // người dùng đã chuyển phòng khác trong lúc chờ
+  hasMore = list.length === PAGE;
+  $("more").classList.toggle("hidden", !hasMore);
+  $("msgs").replaceChildren(...list.map(msgEl));
+  $("msgs").scrollTop = $("msgs").scrollHeight;
+  renderSidebar();
+  $("text").focus();
+}
+
+$("more").onclick = async () => {
+  const box = $("msgs"), first = box.firstElementChild;
+  if (!first) return;
+  const list = await api(`/api/rooms/${current.id}/messages?limit=${PAGE}&before=${first.dataset.id}`);
+  hasMore = list.length === PAGE;
+  $("more").classList.toggle("hidden", !hasMore);
+  const oldHeight = box.scrollHeight;
+  list.reverse().forEach(m => box.prepend(msgEl(m)));
+  box.scrollTop += box.scrollHeight - oldHeight; // giữ nguyên vị trí đang đọc
+};
+
+$("composer").onsubmit = e => {
+  e.preventDefault();
+  const content = $("text").value.trim();
+  if (!content || !current || !ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({
+    type: "message.send",
+    room_id: current.id,
+    content,
+    client_id: Date.now() + "-" + Math.random().toString(36).slice(2),
+  }));
+  $("text").value = "";
+};
+
+/* ---------- Khởi động ---------- */
+if (token) {
+  api("/api/auth/me").then(u => { me = u; start(); }).catch(() => {});
+}
+</script>
+</body>
+</html>
