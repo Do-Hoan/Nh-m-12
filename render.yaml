@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: realchat
+    runtime: docker          # dùng Dockerfile ở thư mục gốc
+    plan: free
+    healthCheckPath: /healthz
+    envVars:
+      - key: MONGODB_URI
+        sync: false          # dán chuỗi kết nối Atlas trong Render Dashboard
+      - key: JWT_SECRET
+        generateValue: true  # Render tự sinh chuỗi ngẫu nhiên
+      - key: DB_NAME
+        value: chatapp
+      - key: CORS_ORIGINS
+        value: ""
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: TURN_URL
+        sync: false
+      - key: TURN_USERNAME
+        sync: false
+      - key: TURN_CREDENTIAL
+        sync: false

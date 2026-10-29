@@ -1,11 +1,13 @@
 # Changelog
 
-Ghi lại các mốc quan trọng của đồ án, phục vụ việc viết báo cáo cuối kỳ.
+## [2.0] - Bản deploy được lên Internet
+- Chuyển sang Motor; cấu hình hoàn toàn qua biến môi trường (`.env.example`).
+- Nhóm chat (tạo, thêm/xóa thành viên, rời nhóm) thay cho kênh công khai; phòng chung `general` seed sẵn.
+- Gửi ảnh (Cloudinary hoặc GridFS), tin nhắn kiểu `image`.
+- Gọi thoại/video 1-1 và gọi nhóm (mesh ≤ 4 người) bằng WebRTC, signaling qua WebSocket; ICE có STUN + TURN.
+- Heartbeat ping/pong, tự kết nối lại với backoff.
+- Giao diện mới (responsive, tiếng Việt), tách `static/{css,js}`; `call_logs`.
+- Dockerfile, render.yaml, Procfile, `/healthz`; viết lại tài liệu và test.
 
-## [Chưa phát hành]
-### Đã làm
-- Dựng MVP: đăng ký/đăng nhập, kênh công khai, chat riêng (DM), lịch sử tin nhắn có phân trang, trạng thái online.
-- Sắp xếp lại cấu trúc dự án theo chuẩn backend/frontend/docs/demos.
-
-### Đang làm
-- Viết demo echo server minh họa giao thức WebSocket thuần.
+## [1.0] - MVP
+- Đăng ký/đăng nhập JWT, kênh công khai, DM, lịch sử phân trang, trạng thái online.

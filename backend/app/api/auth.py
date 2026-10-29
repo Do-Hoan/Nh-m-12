@@ -1,10 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from ..db import db, now
 from ..deps import get_current_user
+from ..models import user_out
 from ..security import create_token, hash_password, verify_password
+from ..ws.manager import manager
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -15,10 +18,9 @@ class AuthIn(BaseModel):
 
 
 def auth_response(user: dict) -> dict:
-    uid = str(user["_id"])
     return {
-        "access_token": create_token(uid, user["username"]),
-        "user": {"id": uid, "username": user["username"]},
+        "access_token": create_token(str(user["_id"]), user["username"]),
+        "user": user_out(user),
     }
 
 
@@ -30,13 +32,17 @@ async def register(data: AuthIn):
         "created_at": now(),
     }
     try:
-        await db.users.insert_one(doc)  # pymongo tự thêm doc["_id"]
+        await db.users.insert_one(doc)  # driver tự thêm doc["_id"]
     except DuplicateKeyError:
         raise HTTPException(409, "Tên đăng nhập đã tồn tại")
-    # Tự động vào kênh #general
-    await db.rooms.update_one(
-        {"type": "channel", "name": "general"}, {"$addToSet": {"members": doc["_id"]}}
+    # Tự động vào phòng chung "general"
+    general = await db.rooms.find_one_and_update(
+        {"is_default": True}, {"$addToSet": {"members": doc["_id"]}}, return_document=ReturnDocument.AFTER
     )
+    if general:
+        manager.set_room_members(str(general["_id"]), general["members"])
+    # Báo cho những người đang online để danh sách người dùng cập nhật ngay
+    await manager.broadcast({"type": "user.created", "user": user_out(doc)})
     return auth_response(doc)
 
 
@@ -50,4 +56,4 @@ async def login(data: AuthIn):
 
 @router.get("/me")
 async def me(user=Depends(get_current_user)):
-    return {"id": str(user["_id"]), "username": user["username"]}
+    return user_out(user)

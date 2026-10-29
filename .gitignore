@@ -17,3 +17,6 @@ Thumbs.db
 
 # Log
 *.log
+
+.env
+.pytest_cache/

@@ -1,64 +1,76 @@
 # Kiến trúc hệ thống
 
-## Sơ đồ tổng quan
+```
+ Trình duyệt (HTML/CSS/JS thuần)                         Internet
+ ┌───────────────────────────┐   HTTPS (REST)    ┌─────────────────────────┐   ┌──────────────┐
+ │ index.html, css/, js/     │ ───────────────▶  │  FastAPI (1 service)    │──▶│ MongoDB Atlas│
+ │  - app.js  (chat)         │   WSS (/ws)       │  - /api/*  REST         │   └──────────────┘
+ │  - calls.js (WebRTC)      │ ◀══════════════▶  │  - /ws     WebSocket    │   ┌──────────────┐
+ └────────────┬──────────────┘                   │  - /       StaticFiles  │──▶│ Cloudinary   │
+              │  media P2P (SRTP)                └─────────────────────────┘   └──────────────┘
+              ▼
+      Trình duyệt khác  ◀── STUN / TURN (Metered) khi hai người ở mạng khác nhau
+```
+
+Chỉ cần deploy **một service**: FastAPI vừa phục vụ API, WebSocket, vừa phục vụ file tĩnh.
+
+## Cấu trúc mã
 
 ```
-┌─────────────┐        HTTP (REST)         ┌──────────────────┐
-│             │  ── đăng nhập, lấy lịch sử ──▶                 │
-│   Trình     │                             │    FastAPI       │       ┌──────────┐
-│   duyệt     │        WebSocket            │    server        │──────▶│ MongoDB  │
-│  (HTML/JS)  │◀── tin nhắn, presence ─────▶│                  │       └──────────┘
-└─────────────┘                             └──────────────────┘
+backend/app/
+├── main.py          khởi tạo app, CORS, /healthz, mount static
+├── config.py        đọc biến môi trường
+├── db.py            Motor client, index, seed phòng "general"
+├── models.py        chuyển document Mongo -> JSON
+├── security.py      bcrypt + JWT
+├── deps.py          xác thực cho REST và WS
+├── api/             routers REST: auth, users (+ice-servers), rooms, files
+├── services/        storage.py: Cloudinary hoặc GridFS
+└── ws/
+    ├── manager.py   ConnectionManager: kết nối theo user_id và theo room
+    ├── calls.py     CallManager: trạng thái cuộc gọi + relay signaling
+    └── endpoint.py  /ws: xác thực, heartbeat, điều phối sự kiện
+backend/static/      giao diện
+backend/tests/       pytest (dùng mongomock-motor, không cần MongoDB)
 ```
 
-## Vì sao tách REST và WebSocket
+## REST và WebSocket
 
-| | REST (HTTP) | WebSocket |
+| | REST | WebSocket |
 |---|---|---|
-| Dùng cho | Đăng ký, đăng nhập, tạo/liệt kê phòng, tải lịch sử tin nhắn | Gửi/nhận tin nhắn mới, cập nhật trạng thái online |
-| Đặc điểm | Có trạng thái phản hồi rõ ràng (mã lỗi, phân trang), không cần real-time | Cần hai chiều, cần độ trễ thấp |
+| Dùng cho | Đăng ký/đăng nhập, danh sách, tạo nhóm, thành viên, lịch sử (phân trang), upload ảnh, cấu hình ICE | Tin nhắn mới, presence, signaling cuộc gọi, sự kiện nhóm |
+| Lý do | Cần mã trạng thái, phân trang, multipart | Cần hai chiều, độ trễ thấp |
 
-Tách riêng hai luồng giúp phần WebSocket chỉ tập trung vào đúng việc cần real-time, đồng thời tận dụng được các cơ chế sẵn có của HTTP (mã trạng thái, cache) cho phần còn lại.
-
-## Quản lý kết nối WebSocket
-
-`ConnectionManager` (`backend/app/ws/manager.py`) giữ một bảng ánh xạ:
+## ConnectionManager
 
 ```
-user_id -> { các WebSocket đang mở của user đó }
+sockets: user_id -> {WebSocket, WebSocket, ...}   (một user nhiều tab)
+rooms:   room_id -> {user_id, ...}                (để gửi tới cả phòng mà không đọc DB mỗi tin)
 ```
 
-Một người dùng có thể mở nhiều tab/thiết bị cùng lúc, nên giá trị là một **tập hợp** (set) các kết nối chứ không phải một kết nối duy nhất.
+- `presence.update` chỉ phát khi tab đầu tiên mở / tab cuối cùng đóng.
+- `rooms` được đồng bộ khi kết nối, khi tạo/sửa nhóm và khi mở DM. DB vẫn là nguồn sự thật cho việc kiểm tra quyền.
+- Vì trạng thái nằm trong RAM của tiến trình, **chỉ chạy 1 worker**. Muốn nhiều instance cần Redis Pub/Sub (chưa làm).
 
-Khi có tin nhắn mới gửi tới một phòng:
-1. Server tra `room.members` trong MongoDB để biết ai thuộc phòng đó.
-2. Với mỗi `user_id` trong danh sách thành viên, tra trong `ConnectionManager` xem họ có đang mở kết nối nào không.
-3. Gửi tin nhắn tới đúng các kết nối đó — **không** broadcast cho tất cả mọi người đang online.
-
-Khi một user mất kết nối hoàn toàn (đóng tab cuối cùng), server phát sự kiện `presence.update` với `status: offline` cho tất cả mọi người.
-
-## Luồng xác thực
-
-1. Người dùng đăng nhập qua `POST /api/auth/login`, nhận về một JWT.
-2. Khi mở WebSocket, client gắn token vào query string: `ws://host/ws?token=<JWT>` (trình duyệt không cho gắn header tùy ý khi mở WebSocket, nên không thể dùng `Authorization` header như REST).
-3. Server giải mã token ngay sau khi `accept()` kết nối; nếu token sai hoặc hết hạn, server đóng kết nối với mã lỗi tùy chỉnh `4401`.
-
-## Vòng đời một tin nhắn
+## Vòng đời tin nhắn
 
 ```
-Client gửi message.send qua WebSocket
-        │
-        ▼
-Server kiểm tra: user có thuộc room không?
-        │ không → gửi lại error, dừng
-        ▼ có
-Lưu tin nhắn vào MongoDB (messages collection)
-        │
-        ▼
-Lấy danh sách members của room
-        │
-        ▼
-Gửi sự kiện message.new tới từng kết nối của từng thành viên
+Client gửi message.send
+   │
+   ▼  người gửi thuộc phòng? ── không ──▶ error FORBIDDEN
+   │ có
+   ▼  lưu MongoDB (messages)
+   ▼  manager.send_to_room → message.new tới mọi tab của mọi thành viên online
 ```
 
-Nguyên tắc quan trọng: **luôn lưu DB trước rồi mới gửi (broadcast)**. Nếu làm ngược lại, một tin nhắn có thể tới được người nhận nhưng không được lưu nếu server gặp lỗi giữa chừng.
+Luôn **lưu DB trước, broadcast sau**: nếu lỗi giữa chừng thì không có tin "ma" (người nhận thấy nhưng không có trong lịch sử).
+
+## Cuộc gọi WebRTC
+
+Server không chạm vào media. `CallManager` chỉ giữ trạng thái (đổ chuông, ai đã vào, hết giờ 30s, bận) và chuyển tiếp offer/answer/ICE tới đúng người. Gọi nhóm dùng **mesh**: mỗi cặp một `RTCPeerConnection`, người mới vào offer tới mọi người đã có mặt; giới hạn 4 người vì băng thông upload tăng theo số người (n-1 luồng). Chi tiết ở [protocol.md](protocol.md).
+
+## Xác thực
+
+1. `POST /api/auth/login` trả JWT (HS256, hạn 24h).
+2. REST dùng `Authorization: Bearer`; WebSocket dùng `?token=` và đóng mã `4401` nếu sai.
+3. Đăng xuất: client xóa token và đóng WebSocket (JWT không trạng thái nên không cần endpoint phía server).

@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1b2340">
+<title>RealChat - Chat thời gian thực</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+<!-- Màn hình đăng nhập / đăng ký -->
+<div id="auth">
+  <form id="authForm">
+    <h1>RealChat</h1>
+    <p class="sub">Chat, gọi thoại và video thời gian thực</p>
+    <input id="username" placeholder="Tên đăng nhập (3-20 ký tự: chữ, số, _)" autocomplete="username" required>
+    <input id="password" type="password" placeholder="Mật khẩu (tối thiểu 6 ký tự)" autocomplete="current-password" required>
+    <div id="err" role="alert"></div>
+    <button type="submit">Đăng nhập</button>
+    <button type="button" class="ghost" id="registerBtn">Tạo tài khoản mới</button>
+  </form>
+</div>
+
+<!-- Ứng dụng chính -->
+<div id="app" class="hidden">
+  <aside id="sidebar">
+    <div class="me">
+      <span><b id="meName"></b><small id="status">Đang kết nối...</small></span>
+      <button class="ghost small" id="logoutBtn">Đăng xuất</button>
+    </div>
+    <h2>Nhóm chat <button class="small" id="newGroupBtn" title="Tạo nhóm mới">+</button></h2>
+    <div id="groups"></div>
+    <h2>Người dùng <span id="onlineCount" class="muted"></span></h2>
+    <div id="users"></div>
+  </aside>
+
+  <main id="chat">
+    <header id="chatHeader" class="hidden">
+      <button class="icon back" id="backBtn" aria-label="Quay lại">&#8592;</button>
+      <div class="title"><b id="roomTitle"></b><small id="roomSub"></small></div>
+      <button class="icon hidden" id="joinCallBtn">Tham gia cuộc gọi</button>
+      <button class="icon" id="voiceBtn" title="Gọi thoại" aria-label="Gọi thoại">&#128222;</button>
+      <button class="icon" id="videoBtn" title="Gọi video" aria-label="Gọi video">&#127909;</button>
+      <button class="icon hidden" id="manageBtn" title="Thành viên nhóm" aria-label="Thành viên nhóm">&#9881;</button>
+    </header>
+    <div id="msgs"><div class="placeholder">Chọn một nhóm hoặc một người ở cột bên trái để bắt đầu trò chuyện.</div></div>
+    <form id="composer" class="hidden">
+      <input type="file" id="imgInput" accept="image/jpeg,image/png,image/gif,image/webp" class="hidden">
+      <button type="button" class="icon" id="imgBtn" title="Gửi ảnh" aria-label="Gửi ảnh">&#128206;</button>
+      <input id="text" placeholder="Nhập tin nhắn..." autocomplete="off" maxlength="2000">
+      <button type="submit">Gửi</button>
+    </form>
+  </main>
+</div>
+
+<!-- Modal dùng chung (tạo nhóm / quản lý nhóm) -->
+<div id="modal" class="overlay hidden"><div class="dialog" id="dialog"></div></div>
+
+<!-- Popup cuộc gọi đến -->
+<div id="incoming" class="overlay hidden">
+  <div class="dialog incoming">
+    <div class="avatar big" id="inAvatar"></div>
+    <h3 id="inName"></h3>
+    <p id="inText"></p>
+    <div class="row">
+      <button class="danger round" id="rejectBtn">Từ chối</button>
+      <button class="ok round" id="acceptBtn">Nghe</button>
+    </div>
+  </div>
+</div>
+
+<!-- Màn hình cuộc gọi -->
+<div id="callScreen" class="hidden">
+  <div class="callTop"><b id="callTitle"></b><span id="callStatus"></span></div>
+  <div id="tiles"></div>
+  <div class="callBar">
+    <button class="round" id="micBtn" title="Tắt/bật mic">Mic</button>
+    <button class="round" id="camBtn" title="Tắt/bật camera">Camera</button>
+    <button class="round danger" id="hangBtn">Cúp máy</button>
+  </div>
+</div>
+
+<div id="toasts"></div>
+
+<script src="/js/app.js"></script>
+<script src="/js/calls.js"></script>
+</body>
+</html>

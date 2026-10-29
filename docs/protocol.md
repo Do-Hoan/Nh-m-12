@@ -1,92 +1,143 @@
 # Đặc tả giao thức WebSocket
 
-## Bắt tay (handshake)
+Một endpoint duy nhất: `ws(s)://<host>/ws?token=<JWT>`. Toàn bộ dữ liệu là JSON dạng `{"type": "...", ...}`.
 
-WebSocket bắt đầu bằng một request HTTP thông thường kèm các header đặc biệt để "nâng cấp" (upgrade) kết nối:
+- Trang chạy HTTPS thì dùng `wss://` (frontend tự chọn theo `location.protocol`).
+- Token nằm trên query string vì trình duyệt không cho gắn header `Authorization` khi mở WebSocket.
+- Mã đóng tùy chỉnh: `4401` = token sai/hết hạn. Client gặp mã này thì đăng xuất, không tự kết nối lại.
+- Mỗi khung (frame) tối đa 128 KB; vượt quá nhận `error TOO_LARGE`.
 
+## 1. Kết nối, presence, heartbeat
+
+| Hướng | type | Trường | Ý nghĩa |
+|---|---|---|---|
+| S→C | `presence.list` | `users: [user_id]` | Gửi ngay sau khi kết nối: ai đang online |
+| S→C | `presence.update` | `user_id`, `username`, `status: online\|offline` | Chỉ phát khi user mở tab ĐẦU TIÊN / đóng tab CUỐI CÙNG (hỗ trợ nhiều tab) |
+| S→C | `user.created` | `user: {id, username}` | Có người mới đăng ký, cập nhật danh sách |
+| C→S | `ping` | – | Heartbeat, client gửi mỗi 20 giây |
+| S→C | `pong` | – | Client 10 giây không thấy pong thì đóng và tự kết nối lại |
+
+Server cũng tự đóng kết nối nếu 60 giây không nhận được gì (kể cả ping). Client tự kết nối lại với backoff tăng dần 1s, 2s, 4s, 8s... tối đa 15s.
+
+## 2. Tin nhắn
+
+```jsonc
+// C→S  gửi tin
+{ "type": "message.send", "room_id": "...", "msg_type": "text",  "content": "Xin chào", "client_id": "abc" }
+{ "type": "message.send", "room_id": "...", "msg_type": "image", "content": "https://res.cloudinary.com/.../a.jpg", "client_id": "abd" }
+
+// S→C  tới MỌI thành viên đang online của phòng (kể cả người gửi, mọi tab)
+{ "type": "message.new", "id": "...", "room_id": "...", "sender": {"id": "...", "username": "an"},
+  "msg_type": "text", "content": "Xin chào", "ts": "2026-10-30T10:00:00Z", "client_id": "abc" }
 ```
-GET /ws?token=eyJhbGc... HTTP/1.1
-Host: localhost:8000
-Upgrade: websocket
-Connection: Upgrade
-Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==
-Sec-WebSocket-Version: 13
-```
 
-Nếu server chấp nhận, nó trả về mã trạng thái `101 Switching Protocols`:
+Server xử lý theo đúng thứ tự: **(1) kiểm tra người gửi thuộc phòng → (2) lưu MongoDB → (3) mới broadcast**. Tin ảnh chỉ chấp nhận URL do chính hệ thống cấp (Cloudinary của mình hoặc `/api/files/...`), không nhận URL tùy ý.
 
-```
-HTTP/1.1 101 Switching Protocols
-Upgrade: websocket
-Connection: Upgrade
-Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
-```
+Ảnh được gửi bằng 2 bước: `POST /api/upload` (multipart, tối đa 5MB, jpg/png/gif/webp, kiểm tra cả "magic bytes") → nhận `{"url"}` → gửi `message.send` với `msg_type: image`.
 
-Sau bước này, kết nối TCP ban đầu được giữ nguyên nhưng không còn là HTTP nữa — cả hai bên có thể gửi dữ liệu cho nhau bất cứ lúc nào, theo cả hai chiều (full-duplex), cho tới khi một bên đóng kết nối.
+## 3. Nhóm
 
-> Xem thêm: [RFC 6455 — The WebSocket Protocol](https://datatracker.ietf.org/doc/html/rfc6455)
+| Hướng | type | Trường | Khi nào |
+|---|---|---|---|
+| S→C | `group.created` | `room` | Bạn vừa được tạo nhóm / được thêm vào nhóm |
+| S→C | `group.updated` | `room` | Thành viên hoặc người tạo nhóm thay đổi |
+| S→C | `group.removed` | `room_id` | Bạn bị xóa khỏi nhóm hoặc vừa rời nhóm |
 
-## Endpoint trong dự án
+Tạo nhóm, thêm/xóa thành viên, rời nhóm đi qua REST (`/api/rooms/...`); server đẩy các sự kiện trên để mọi client đang online cập nhật ngay.
 
-```
-ws://host/ws?token=<JWT>
-```
+## 4. Cuộc gọi (signaling)
 
-Token nằm trong query string vì trình duyệt không cho gắn header tùy ý (`Authorization`) khi mở WebSocket bằng `new WebSocket(url)`.
-
-Mã đóng kết nối tùy chỉnh: `4401` — token sai hoặc hết hạn (dải `4000–4999` được RFC 6455 dành riêng cho ứng dụng tự định nghĩa).
-
-## Định dạng sự kiện
-
-Toàn bộ dữ liệu trao đổi là JSON dạng `{"type": "...", ...}`, mỗi `type` là một loại sự kiện.
+WebSocket chỉ làm kênh **signaling**; âm thanh/hình ảnh đi trực tiếp giữa các trình duyệt qua WebRTC (STUN/TURN khi cần). Gọi 1-1 và gọi nhóm dùng chung một bộ message.
 
 ### Client → Server
 
-| type | Mô tả | Payload |
+| type | Trường | Ý nghĩa |
 |---|---|---|
-| `message.send` | Gửi một tin nhắn vào phòng | `room_id`, `content`, `client_id` |
+| `call.invite` | `room_id`, `media: audio\|video` | Bắt đầu gọi (DM: gọi người kia; nhóm: gọi cả nhóm) |
+| `call.accept` | `call_id` | Nghe máy / tham gia cuộc gọi nhóm đang diễn ra |
+| `call.reject` | `call_id` | Từ chối khi đang đổ chuông |
+| `call.end` | `call_id` | Cúp máy / rời cuộc gọi / hủy khi chưa ai nghe |
+| `webrtc.offer` | `call_id`, `to: user_id`, `payload: {sdp}` | SDP offer |
+| `webrtc.answer` | `call_id`, `to`, `payload: {sdp}` | SDP answer |
+| `webrtc.ice` | `call_id`, `to`, `payload: {candidate}` | ICE candidate |
 
 ### Server → Client
 
-| type | Mô tả | Payload |
-|---|---|---|
-| `presence.list` | Gửi ngay sau khi kết nối thành công: danh sách người đang online | `users: string[]` |
-| `presence.update` | Một người vừa online/offline | `username`, `status` |
-| `message.new` | Có tin nhắn mới trong phòng | `id`, `room_id`, `sender`, `content`, `ts`, `client_id` |
-| `error` | Yêu cầu bị từ chối | `code`, `detail` |
+| type | Trường | Gửi cho | Ý nghĩa |
+|---|---|---|---|
+| `call.ringing` | `call_id`, `room_id`, `media`, `is_group` | Người gọi | Đã tạo cuộc gọi, đang đổ chuông |
+| `call.incoming` | `call_id`, `room_id`, `room_name`, `media`, `is_group`, `from` | Người được gọi (mọi tab) | Hiện popup nhận/từ chối |
+| `call.busy` | `room_id`, `reason` | Người gọi | Người kia đang bận |
+| `call.unavailable` | `room_id`, `reason: offline` | Người gọi | Người kia không online |
+| `call.joined` | `call_id`, `participants: [user]`, ... | Người vừa vào | Danh sách người đang ở trong cuộc gọi → tạo offer tới từng người |
+| `call.participant_joined` | `call_id`, `user` | Người đã ở trong | Có người mới, chờ nhận offer |
+| `call.participant_left` | `call_id`, `user` | Người còn lại | Có người rời |
+| `call.rejected` | `call_id`, `user` | Người đang ở trong | Có người từ chối |
+| `call.dismiss` | `call_id`, `reason: timeout\|cancelled\|handled\|rejected` | Người đang đổ chuông | Đóng popup (nhỡ / bị hủy / tab khác đã nghe) |
+| `call.ended` | `call_id`, `room_id`, `reason: ended\|rejected\|timeout\|cancelled` | Người đang ở trong | Cuộc gọi kết thúc |
+| `call.status` | `room_id`, `call_id\|null`, `media`, `participants` | Cả phòng nhóm | Nhóm đang có cuộc gọi → hiện nút "Tham gia" |
+| `webrtc.offer/answer/ice` | `call_id`, `from: user_id`, `payload` | Người nhận | Server chỉ chuyển tiếp, không đọc nội dung |
+| `error` | `code`, `detail` | Người gửi | Xem mục 5 |
 
-Ví dụ một vòng gửi/nhận:
+### Sơ đồ gọi 1-1 (A gọi B)
 
-```jsonc
-// Client → Server
-{ "type": "message.send", "room_id": "66f1...", "content": "Xin chào", "client_id": "abc-123" }
-
-// Server → Client (gửi tới mọi thành viên của phòng, kể cả người gửi)
-{
-  "type": "message.new",
-  "id": "66f2...",
-  "room_id": "66f1...",
-  "sender": { "id": "66e0...", "username": "ngocduy" },
-  "content": "Xin chào",
-  "ts": "2026-09-30T10:00:00Z",
-  "client_id": "abc-123"
-}
+```
+  A (người gọi)                Server                      B (người nghe)
+      | call.invite ------------> |                              |
+      | <------------ call.ringing|-------- call.incoming ------>|   (popup)
+      |                           |  [bắt đầu đếm 30 giây]       |
+      |                           | <----------- call.accept ----|
+      | <- call.participant_joined|---- call.joined [A] ------->|
+      |                           | <--------- webrtc.offer (to A)|  B tạo offer
+      | <------- webrtc.offer ----|                              |
+      | webrtc.answer (to B) ---> |------- webrtc.answer ------->|
+      | <=== webrtc.ice ===========(hai chiều)=== webrtc.ice ===>|
+      |<================ media P2P (STUN/TURN) =================>|
+      | call.end ---------------> |------- call.ended ---------->|   (cúp máy)
 ```
 
-`client_id` do client tự sinh (ví dụ UUID) và được server gửi trả lại nguyên vẹn trong `message.new`, giúp giao diện nhận ra "đây là tin mình vừa gửi" mà không cần so khớp nội dung.
+Các nhánh khác:
 
-## So sánh với các phương án khác
+```
+ B không trả lời 30s : Server -> B  call.dismiss(timeout) ; Server -> A  call.ended(timeout)
+ B từ chối           : B -> call.reject ; A nhận call.rejected rồi call.ended(rejected)
+ A hủy khi đang đổ chuông : A -> call.end ; B nhận call.dismiss(cancelled)
+ B bận (đang gọi khác)    : A nhận call.busy ngay, B không bị làm phiền
+ B offline                : A nhận call.unavailable
+ B mở nhiều tab           : tất cả tab đều đổ chuông; tab nào nghe thì tab còn lại nhận call.dismiss(handled)
+ Mất kết nối WebSocket    : server coi như cúp máy, người còn lại nhận call.participant_left / call.ended
+```
 
-| Phương án | Độ trễ | Chi phí tài nguyên | Hai chiều thật sự |
-|---|---|---|---|
-| HTTP polling (hỏi lại mỗi vài giây) | Cao | Cao (nhiều request thừa) | Không |
-| Long polling (giữ request tới khi có dữ liệu) | Trung bình | Trung bình | Không hẳn (vẫn phải mở lại sau mỗi lần) |
-| Server-Sent Events (SSE) | Thấp | Thấp | Không (chỉ một chiều server → client) |
-| **WebSocket** | Thấp | Thấp | Có |
+### Gọi nhóm (mesh, tối đa 4 người)
 
-## Cách quan sát giao thức để chụp cho báo cáo
+```
+ A call.invite(room nhóm) -> các thành viên online & rảnh nhận call.incoming (is_group=true)
+ B call.accept -> B nhận call.joined [A]    -> B offer A
+ C call.accept -> C nhận call.joined [A, B] -> C offer A, C offer B
+ D call.accept -> D offer A, B, C          (mỗi cặp một RTCPeerConnection)
+ E call.accept -> error CALL_FULL "Cuộc gọi đã đủ 4 người"
+ Người vào sau (qua nút "Tham gia" nhờ call.status) cũng dùng call.accept.
+ Ai cúp máy: call.end -> người còn lại nhận call.participant_left.
+ Cuộc gọi kết thúc khi còn <= 1 người và không còn ai đang đổ chuông.
+```
 
-1. Chạy ứng dụng, mở DevTools (F12) → tab **Network** → lọc **WS**.
-2. Mở `http://localhost:8000`, đăng nhập — sẽ thấy một kết nối tới `/ws?token=...` xuất hiện trong danh sách.
-3. Bấm vào kết nối đó → tab **Messages** để xem từng frame JSON gửi/nhận theo thời gian thực — đây là phần nên chụp màn hình cho báo cáo.
-4. Xem phần header của request bằng tab **Headers** để thấy `Upgrade: websocket`, `Sec-WebSocket-Key`, mã phản hồi `101`.
+Quy ước: **người mới vào chủ động tạo offer tới mọi người đã ở trong cuộc gọi**, nên không bao giờ xảy ra hai bên cùng offer (glare).
+
+## 5. Mã lỗi (`error`)
+
+| code | Ý nghĩa |
+|---|---|
+| `BAD_REQUEST` | Không phải JSON hoặc thiếu `type` |
+| `UNKNOWN_TYPE` | `type` không được hỗ trợ |
+| `FORBIDDEN` | Không thuộc phòng |
+| `INVALID_CONTENT` | Nội dung rỗng/quá dài, `msg_type` sai, URL ảnh không hợp lệ |
+| `ALREADY_IN_CALL` | Bạn đang ở trong cuộc gọi khác |
+| `CALL_EXISTS` | Phòng đã có cuộc gọi (kèm `call_id`), hãy tham gia |
+| `CALL_FULL` | Cuộc gọi đã đủ người |
+| `NO_CALL` | Cuộc gọi không còn / không có quyền |
+| `TOO_LARGE` | Dữ liệu quá lớn |
+| `INTERNAL` | Lỗi máy chủ |
+
+## 6. Quan sát giao thức (để chụp báo cáo)
+
+DevTools (F12) → Network → lọc **WS** → bấm kết nối `/ws` → tab **Messages** để xem từng frame JSON; tab **Headers** có `Upgrade: websocket`, `Sec-WebSocket-Key` và phản hồi `101 Switching Protocols`.

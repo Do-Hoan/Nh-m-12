@@ -1,119 +1,114 @@
-# RealChat — Ứng dụng chat real-time học WebSocket
+# RealChat - Chat thời gian thực bằng WebSocket
 
-> Đồ án môn Lập trình mạng. RealChat là một ứng dụng chat nhóm và chat riêng theo thời gian thực, lấy cảm hứng thiết kế từ [Rocket.Chat](https://www.rocket.chat/), được xây dựng để hiểu và vận dụng giao thức WebSocket ở tầng ứng dụng.
+Đồ án môn WebSocket. Ứng dụng chat có đăng ký/đăng nhập, chat 1-1, nhóm, gửi ảnh, gọi thoại/video 1-1 và gọi nhóm (WebRTC), chạy trên HTTPS/WSS để nhiều người cùng test qua Internet.
 
-## Ứng dụng làm được gì
-
-**Đã hoàn thành (MVP):**
-- Đăng ký / đăng nhập tài khoản (JWT).
-- Trò chuyện theo kênh — tạo kênh mới hoặc tham gia kênh công khai có sẵn.
-- Trò chuyện riêng 1-1 (Direct Message).
-- Xem lại lịch sử tin nhắn, tải thêm tin cũ hơn khi cuộn lên (phân trang).
-- Biết ai đang online theo thời gian thực.
-
-**Dự kiến làm tiếp (xem [Lộ trình](#lộ-trình-phát-triển)):** đang gõ..., đã đọc/chưa đọc, gửi file, tự kết nối lại khi mất mạng, chạy nhiều server bằng Redis Pub/Sub.
-
-## Ý tưởng và nguồn tham khảo
-
-Ý tưởng xuất phát từ [Rocket.Chat](https://github.com/RocketChat/Rocket.Chat) — lấy lại mô hình sản phẩm (channel công khai, direct message, bố cục ba cột) chứ không sao chép mã nguồn. Phần giao thức tham khảo [RFC 6455](https://datatracker.ietf.org/doc/html/rfc6455) và [tài liệu WebSocket của MDN](https://developer.mozilla.org/en-US/docs/Web/API/WebSockets_API); phần backend tham khảo [tài liệu FastAPI](https://fastapi.tiangolo.com/) và [tài liệu MongoDB](https://www.mongodb.com/docs/).
-
-## Tài liệu chi tiết
-
-| Tài liệu | Nội dung |
+| Thành phần | Công nghệ |
 |---|---|
-| [`docs/architecture.md`](docs/architecture.md) | Sơ đồ kiến trúc, cách quản lý kết nối WebSocket, luồng xác thực và vòng đời một tin nhắn |
-| [`docs/protocol.md`](docs/protocol.md) | Đặc tả giao thức WebSocket: handshake, định dạng sự kiện, so sánh với polling/SSE |
-| [`docs/data-model.md`](docs/data-model.md) | Thiết kế 3 collection MongoDB và các index |
+| Backend | Python FastAPI, WebSocket gốc (không Socket.IO), Motor (MongoDB async) |
+| CSDL | MongoDB Atlas (free tier) |
+| Frontend | HTML/CSS/JS thuần, do chính FastAPI phục vụ (1 service) |
+| Gọi thoại/video | WebRTC, WebSocket làm kênh signaling, STUN + TURN |
+| Lưu ảnh | Cloudinary, hoặc MongoDB GridFS nếu không cấu hình Cloudinary |
+| Xác thực | bcrypt + JWT (REST dùng header, WebSocket dùng `?token=`) |
 
-Dùng ba file này làm nguồn chính khi viết báo cáo — nội dung được viết sẵn ở dạng có thể trích gần như nguyên văn.
+Tài liệu: [kiến trúc](docs/architecture.md) · [giao thức WebSocket](docs/protocol.md) · [mô hình dữ liệu](docs/data-model.md)
 
-## Công nghệ sử dụng
+## Tính năng
 
-| Thành phần | Lựa chọn |
-|---|---|
-| Backend | Python 3.12 + FastAPI |
-| Giao thức real-time | WebSocket thuần (RFC 6455), không qua Socket.IO |
-| Cơ sở dữ liệu | MongoDB |
-| Xác thực | JWT, mật khẩu băm bằng bcrypt |
-| Frontend | HTML + CSS + JavaScript thuần (dùng trực tiếp WebSocket API của trình duyệt) |
+- Đăng ký, đăng nhập, đăng xuất; mọi người dùng mới tự vào phòng chung `general`.
+- Danh sách người dùng online/offline realtime, hỗ trợ nhiều tab.
+- Chat 1-1 (không bao giờ tạo trùng phòng cho một cặp), chat nhóm (tạo, thêm/xóa thành viên, rời nhóm).
+- Tin nhắn văn bản và hình ảnh (≤ 5MB; jpg/png/gif/webp); lịch sử phân trang cursor, cuộn lên để tải thêm.
+- Gọi thoại/video 1-1: popup gọi đến, từ chối, bận, không trả lời sau 30s, tắt/bật mic và camera, cúp máy.
+- Gọi nhóm (mesh, tối đa 4 người), vào/ra tùy ý, báo "đã đủ người" khi vượt giới hạn.
+- Tự kết nối lại WebSocket (backoff 1s → 15s) + heartbeat ping/pong.
+- Số tin chưa đọc (lưu phía client). Giao diện tiếng Việt, dùng được trên điện thoại.
+
+## Chạy local (để phát triển)
+
+```powershell
+cd backend
+python -m venv .venv
+.venv\Scripts\Activate.ps1          # macOS/Linux: source .venv/bin/activate
+pip install -r requirements-dev.txt
+copy ..\.env.example .env           # rồi điền MONGODB_URI, JWT_SECRET
+uvicorn app.main:app --reload
+```
+
+Mở `http://localhost:8000` (`localhost` được phép dùng camera/mic dù không có HTTPS). Test: `python -m pytest` (không cần MongoDB, dùng `mongomock-motor`).
+
+## Hướng dẫn deploy từng bước (Render)
+
+### Bước 1. Tạo MongoDB Atlas (free)
+
+1. Đăng ký tại <https://www.mongodb.com/cloud/atlas>, tạo **Project**, rồi **Create** cluster loại **M0 (Free)**.
+2. **Database Access** → *Add New Database User*: đặt username + mật khẩu (nên dùng mật khẩu chỉ gồm chữ và số để khỏi phải mã hóa ký tự đặc biệt trong URI).
+3. **Network Access** → *Add IP Address* → nhập `0.0.0.0/0` (Allow access from anywhere), vì Render free không có IP cố định.
+4. **Database** → *Connect* → *Drivers* → copy chuỗi `mongodb+srv://...`, thay `<password>` bằng mật khẩu thật. Đây là `MONGODB_URI`.
+
+### Bước 2. Lấy TURN miễn phí (Metered Open Relay)
+
+STUN chỉ đủ khi hai người cùng mạng hoặc NAT dễ dãi; khác mạng (4G ↔ WiFi) thường cần TURN để chuyển tiếp media.
+
+1. Đăng ký <https://www.metered.ca/tools/openrelay/> (gói Open Relay miễn phí, có hạn mức dung lượng hàng tháng).
+2. Vào Dashboard → **TURN Server** → tạo credential. Ghi lại địa chỉ máy chủ, username, credential.
+3. Điền vào:
+   - `TURN_URL` = các URL ngăn bằng dấu phẩy, ví dụ `turn:standard.relay.metered.ca:80,turn:standard.relay.metered.ca:443,turns:standard.relay.metered.ca:443?transport=tcp` (lấy đúng giá trị trong dashboard của bạn)
+   - `TURN_USERNAME`, `TURN_CREDENTIAL`
+
+Có thể dùng nhà cung cấp TURN khác (Twilio, coturn tự dựng), định dạng biến giống nhau.
+
+### Bước 3. Tạo Cloudinary (tùy chọn)
+
+1. Đăng ký <https://cloudinary.com> (free).
+2. Dashboard → copy **Cloud name**, **API Key**, **API Secret** vào `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`.
+3. Bỏ qua bước này thì ảnh tự lưu vào MongoDB GridFS (vẫn hoạt động, chỉ tốn dung lượng 512MB của Atlas M0).
+
+### Bước 4. Deploy lên Render
+
+1. Đẩy mã lên GitHub (không commit `.env`).
+2. Render → **New** → **Blueprint** → chọn repo; Render đọc [render.yaml](render.yaml) (dùng [Dockerfile](Dockerfile)). Hoặc **New Web Service** → *Runtime: Docker*.
+3. Nhập các biến môi trường (xem [.env.example](.env.example)): `MONGODB_URI`, `JWT_SECRET` (blueprint tự sinh), `CLOUDINARY_*`, `TURN_*`, `CORS_ORIGINS` (để trống nếu chỉ dùng chính domain Render).
+4. Lệnh khởi động (đã nằm trong Dockerfile): `uvicorn app.main:app --host 0.0.0.0 --port $PORT`. Nếu dùng Railway/Fly.io: Dockerfile dùng được nguyên xi; hoặc dùng [Procfile](Procfile).
+5. Render tự cấp HTTPS, nên WebSocket chạy trên `wss://` và camera/mic hoạt động.
+
+> Gói free của Render tự ngủ sau ~15 phút không có truy cập; lần mở đầu mất khoảng một phút để thức dậy. Hãy mở trang trước giờ demo.
+
+### Bước 5. Kiểm tra sau deploy
+
+1. Mở `https://<tên-app>.onrender.com/healthz` → thấy `{"ok":true}`.
+2. Mở trang chính, đăng ký 2 tài khoản trên 2 thiết bị (ví dụ laptop và điện thoại 4G).
+3. Gửi tin nhắn, gửi ảnh; kiểm tra chấm xanh online đổi theo thời gian thực.
+4. Gọi thoại, gọi video giữa hai thiết bị khác mạng. Nếu bị kẹt "Đang kết nối..." mãi thì thường do thiếu/sai TURN: mở `https://<app>/api/ice-servers` (khi đã đăng nhập, gọi kèm token) để xem có mục `turn:` không, hoặc dùng <https://webrtc.github.io/samples/src/content/peerconnection/trickle-ice/> để thử thông tin TURN.
+5. Tạo nhóm 3 người rồi gọi nhóm; người thứ 5 vào phải thấy thông báo "đã đủ 4 người".
 
 ## Cấu trúc thư mục
 
 ```
-realtime-chat/
+.
+├── Dockerfile, render.yaml, Procfile, .env.example
 ├── backend/
-│   ├── app/
-│   │   ├── main.py        # khởi tạo FastAPI, gắn router, mount frontend
-│   │   ├── config.py       # đọc cấu hình từ .env
-│   │   ├── db.py            # kết nối MongoDB, tạo index
-│   │   ├── security.py     # băm mật khẩu, tạo/giải mã JWT
-│   │   ├── deps.py          # dependency xác thực dùng chung cho REST
-│   │   ├── serializers.py  # chuyển document Mongo -> JSON trả về client
-│   │   ├── api/              # route REST: auth, users, rooms
-│   │   └── ws/                # ConnectionManager và endpoint WebSocket
-│   ├── tests/               # test viết bằng pytest
-│   ├── requirements.txt
-│   └── pytest.ini
-├── frontend/
-│   └── index.html            # toàn bộ giao diện (HTML + CSS + JS trong 1 file)
-├── demos/
-│   └── echo_server/          # demo WebSocket thuần, tách khỏi FastAPI, để minh họa giao thức
-├── docs/
-│   ├── architecture.md
-│   ├── protocol.md
-│   ├── data-model.md
-│   ├── screenshots/           # ảnh chụp giao diện/demo để chèn báo cáo
-│   └── diagrams/              # sơ đồ (vẽ tay, draw.io, hoặc mermaid)
-├── scripts/                   # script tiện ích (sẽ thêm khi cần)
-├── .env.example                # mẫu biến môi trường, copy thành .env rồi chỉnh
-├── .gitignore
-└── CHANGELOG.md
+│   ├── app/            main, config, db, models, security, deps
+│   │   ├── api/        auth, users, rooms, files (REST)
+│   │   ├── services/   storage (Cloudinary / GridFS)
+│   │   └── ws/         manager, calls, endpoint (WebSocket)
+│   ├── static/         index.html, css/, js/ (app.js, calls.js)
+│   └── tests/          test_auth, test_chat, test_calls
+├── docs/               architecture, protocol, data-model
+└── demos/echo_server/  (chưa làm) demo WebSocket thuần
 ```
 
-## Cài đặt và chạy thử
+## Hiện trạng và hạn chế
 
-```bash
-# 1. Vào thư mục backend
-cd backend
+Đã kiểm tra:
+- 27 test tự động (đăng ký/đăng nhập, WebSocket gửi tin, DM không trùng, nhóm, phân trang, upload, toàn bộ luồng signaling gọi 1-1 và gọi nhóm).
+- Chạy thật trên trình duyệt (MongoDB giả trong RAM): chat 1-1, unread, giao diện điện thoại, gọi video 1-1 và gọi nhóm 3 người kết nối WebRTC thành công (dùng camera/mic giả).
 
-# 2. Tạo virtual environment và cài thư viện
-python -m venv .venv
-.venv\Scripts\Activate.ps1        # Windows (PowerShell)
-# source .venv/bin/activate       # macOS/Linux
-pip install -r requirements.txt
-
-# 3. (Tùy chọn) tạo file .env từ mẫu nếu muốn đổi cấu hình mặc định
-copy ..\.env.example .env         # Windows
-# cp ../.env.example .env         # macOS/Linux
-
-# 4. Đảm bảo MongoDB đang chạy (mongodb://localhost:27017), rồi chạy server
-uvicorn app.main:app --reload
-```
-
-Mở `http://localhost:8000`. Tài liệu API (Swagger) tại `http://localhost:8000/docs`.
-
-## Chạy test
-
-```bash
-cd backend
-pytest
-```
-
-## Lộ trình phát triển
-
-- [x] Chat broadcast cơ bản
-- [x] Tài khoản và xác thực (JWT)
-- [x] Kênh, chat riêng, lịch sử có phân trang
-- [ ] Demo giao thức WebSocket thuần (`demos/echo_server`)
-- [ ] Trạng thái "đang gõ...", đã đọc/chưa đọc
-- [ ] Tự động kết nối lại khi mất mạng
-- [ ] Gửi kèm file/ảnh
-- [ ] Chạy nhiều server bằng Redis Pub/Sub
-- [ ] Viết test đầy đủ, đóng gói Docker Compose
-
-## Giới hạn hiện tại
-
-- Chỉ chạy được một tiến trình server duy nhất (chưa có Redis Pub/Sub), nên chưa scale ngang được.
-- Chưa mã hóa đầu-cuối; khi triển khai thật cần dùng WSS (TLS) để bảo vệ ở tầng vận chuyển.
-- Chưa có kênh riêng tư cần lời mời, chỉ có kênh công khai và chat 1-1.
-- Đây là đồ án học tập, chưa qua kiểm thử bảo mật ở mức sản phẩm thật.
+Chưa kiểm tra / hạn chế:
+- **Chưa chạy với MongoDB Atlas, Cloudinary, GridFS và TURN thật** (cần tài khoản của bạn). Test dùng MongoDB giả; phần GridFS và Cloudinary chưa được chạy thử.
+- Chưa thử camera/mic thật và chưa thử gọi giữa hai mạng khác nhau; phụ thuộc vào TURN bạn cấu hình.
+- Chỉ chạy 1 worker/instance (trạng thái kết nối và cuộc gọi nằm trong RAM); redeploy hoặc server ngủ sẽ ngắt WebSocket và cuộc gọi.
+- Mesh nên tối đa 4 người; chất lượng giảm khi mạng yếu.
+- Ảnh GridFS truy cập qua URL công khai khó đoán (thẻ `<img>` không gửi được header). Chưa có giới hạn tần suất (rate limit), chưa có đổi mật khẩu/quên mật khẩu.
+- Số tin chưa đọc chỉ lưu ở trình duyệt. Khi bị xóa khỏi nhóm đang gọi, người đó chưa bị đá khỏi cuộc gọi.
+- Motor đã được MongoDB công bố ngừng phát triển (khuyến nghị chuyển sang PyMongo Async API); đề bài yêu cầu Motor nên vẫn dùng, ghim `motor<4`.
