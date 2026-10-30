@@ -8,7 +8,13 @@ def iso(dt) -> str | None:
 
 
 def user_out(u: dict) -> dict:
-    return {"id": str(u["_id"]), "username": u["username"]}
+    return {
+        "id": str(u["_id"]),
+        "username": u["username"],
+        "display_name": u.get("display_name") or u["username"],
+        "about": u.get("about", ""),
+        "avatar_url": u.get("avatar_url"),
+    }
 
 
 def message_out(m: dict) -> dict:
@@ -25,7 +31,10 @@ def message_out(m: dict) -> dict:
 async def rooms_out(rooms: list[dict], me_id) -> list[dict]:
     """Dựng JSON cho nhiều phòng, chỉ tốn 1 truy vấn để lấy tên thành viên."""
     ids = {uid for r in rooms for uid in r["members"]}
-    docs = await db.users.find({"_id": {"$in": list(ids)}}, {"username": 1}).to_list(None)
+    docs = await db.users.find(
+        {"_id": {"$in": list(ids)}},
+        {"username": 1, "display_name": 1, "about": 1, "avatar_url": 1},
+    ).to_list(None)
     by_id = {d["_id"]: user_out(d) for d in docs}
     out = []
     for r in rooms:
