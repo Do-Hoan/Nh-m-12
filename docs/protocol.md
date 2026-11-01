@@ -35,6 +35,217 @@ Server xử lý theo đúng thứ tự: **(1) kiểm tra người gửi thuộc 
 
 Ảnh được gửi bằng 2 bước: `POST /api/upload` (multipart, tối đa 5MB, jpg/png/gif/webp, kiểm tra cả "magic bytes") → nhận `{"url"}` → gửi `message.send` với `msg_type: image`.
 
+## 2.1. Chỉ báo đang gõ (Typing Indicator)
+
+Dùng để thông báo một thành viên đang nhập tin nhắn trong phòng chat.
+
+| Hướng | type | Trường | Ý nghĩa |
+|---|---|---|---|
+| C→S | `typing.start` | `room_id` | Bắt đầu nhập tin nhắn |
+| C→S | `typing.stop` | `room_id` | Dừng nhập tin nhắn |
+| S→C | `typing.start` | `room_id`, `user_id`, `username` | Thông báo người dùng đang gõ |
+| S→C | `typing.stop` | `room_id`, `user_id`, `username` | Thông báo người dùng đã dừng gõ |
+
+**Ví dụ Client → Server**
+
+Bắt đầu nhập:
+
+```json
+{
+  "type": "typing.start",
+  "room_id": "ROOM_ID"
+}
+```
+
+Dừng nhập:
+
+```json
+{
+  "type": "typing.stop",
+  "room_id": "ROOM_ID"
+}
+```
+
+**Ví dụ Server → Client**
+
+```json
+{
+  "type": "typing.start",
+  "room_id": "ROOM_ID",
+  "user_id": "USER_ID",
+  "username": "an"
+}
+```
+
+Server chỉ gửi sự kiện cho các thành viên trong phòng hợp lệ.
+
+Typing Indicator chỉ là trạng thái tạm thời, không lưu vào MongoDB.
+
+## 2.2. Đánh dấu tin nhắn đã đọc (Message Read)
+
+Dùng để lưu trạng thái đọc tin nhắn vào MongoDB và đồng bộ cho các thành viên trong phòng.
+
+| Hướng | type | Trường | Ý nghĩa |
+|---|---|---|---|
+| C→S | `message.read` | `room_id`, `message_id` (tùy chọn) | Đánh dấu tin nhắn đã đọc |
+| S→C | `message.read` | `room_id`, `user_id`, `read_at` | Thông báo trạng thái đã đọc |
+
+**Ví dụ Client → Server**
+
+```json
+{
+  "type": "message.read",
+  "room_id": "ROOM_ID",
+  "message_id": "MESSAGE_ID"
+}
+```
+
+**Ví dụ Server → Client**
+
+```json
+{
+  "type": "message.read",
+  "room_id": "ROOM_ID",
+  "user_id": "USER_ID",
+  "read_at": "2026-10-30T10:00:00"
+}
+```
+
+Dữ liệu được lưu trong MongoDB:
+
+- `messages.read_by`: danh sách người đã đọc tin nhắn.
+- `rooms.read_by`: lưu thời gian đọc gần nhất của từng thành viên.
+
+Trạng thái đọc được gửi qua WebSocket để các thiết bị đang kết nối cập nhật.
+
+## 2.3. Chỉnh sửa tin nhắn (Message Edit)
+
+Dùng để chỉnh sửa nội dung tin nhắn đã gửi.
+
+| Hướng | type | Trường | Ý nghĩa |
+|---|---|---|---|
+| C→S | `message.edit` | `room_id`, `message_id`, `content` | Yêu cầu chỉnh sửa tin nhắn |
+| S→C | `message.edited` | Thông tin tin nhắn đã cập nhật | Thông báo tin nhắn được chỉnh sửa |
+
+**Ví dụ Client → Server**
+
+```json
+{
+  "type": "message.edit",
+  "room_id": "ROOM_ID",
+  "message_id": "MESSAGE_ID",
+  "content": "Nội dung mới"
+}
+```
+
+**Ví dụ Server → Client**
+
+```json
+{
+  "type": "message.edited",
+  "id": "MESSAGE_ID",
+  "room_id": "ROOM_ID",
+  "content": "Nội dung mới",
+  "edited_at": "2026-10-30T10:00:00"
+}
+```
+
+Quy tắc:
+
+- Chỉ người gửi mới được chỉnh sửa tin nhắn.
+- Nội dung không được để trống.
+- Nội dung không vượt quá giới hạn `MAX_MESSAGE_LEN`.
+- Server lưu nội dung mới và thời gian chỉnh sửa vào MongoDB.
+- Server broadcast sự kiện `message.edited` đến các thành viên trong phòng.
+
+## 2.4. Thu hồi tin nhắn (Message Delete)
+
+Dùng để thu hồi tin nhắn đã gửi.
+
+| Hướng | type | Trường | Ý nghĩa |
+|---|---|---|---|
+| C→S | `message.delete` | `room_id`, `message_id` | Yêu cầu thu hồi tin nhắn |
+| S→C | `message.deleted` | Thông tin tin nhắn đã thu hồi, `message_id` | Thông báo tin nhắn đã bị thu hồi |
+
+**Ví dụ Client → Server**
+
+```json
+{
+  "type": "message.delete",
+  "room_id": "ROOM_ID",
+  "message_id": "MESSAGE_ID"
+}
+```
+
+**Ví dụ Server → Client**
+
+```json
+{
+  "type": "message.deleted",
+  "message_id": "MESSAGE_ID",
+  "content": "[tin nhắn đã thu hồi]"
+}
+```
+
+Quy tắc:
+
+- Chỉ người gửi mới được thu hồi tin nhắn.
+- Tin nhắn được đánh dấu bằng `deleted_at` trong MongoDB.
+- Nội dung được thay bằng `[tin nhắn đã thu hồi]`.
+- Server broadcast sự kiện `message.deleted` đến các thành viên trong phòng.
+
+Đây là cơ chế thu hồi mềm (Soft Delete), không xóa bản ghi khỏi MongoDB.
+
+## 2.5. Biểu tượng cảm xúc (Message Reaction)
+
+Dùng để thêm hoặc gỡ biểu tượng cảm xúc trên tin nhắn.
+
+| Hướng | type | Trường | Ý nghĩa |
+|---|---|---|---|
+| C→S | `message.reaction` | `room_id`, `message_id`, `emoji` | Thêm hoặc gỡ reaction |
+| S→C | `message.reaction` | Thông tin tin nhắn đã cập nhật, `emoji` | Đồng bộ reaction |
+
+**Ví dụ Client → Server**
+
+```json
+{
+  "type": "message.reaction",
+  "room_id": "ROOM_ID",
+  "message_id": "MESSAGE_ID",
+  "emoji": "❤️"
+}
+```
+
+**Ví dụ Server → Client**
+
+```json
+{
+  "type": "message.reaction",
+  "message_id": "MESSAGE_ID",
+  "emoji": "❤️"
+}
+```
+
+Quy tắc:
+
+- Mỗi người dùng có thể thêm reaction vào tin nhắn.
+- Nếu người dùng đã thả cùng emoji thì gửi lại sự kiện sẽ gỡ reaction đó.
+- Reaction được lưu trong MongoDB tại trường `reactions`.
+- Server broadcast thay đổi đến các thành viên trong phòng.
+
+## 2.6. Kiểm tra quyền và xử lý lỗi
+
+Server phải kiểm tra người dùng thuộc phòng trước khi thực hiện các thao tác theo phòng.
+
+Các lỗi có thể trả về:
+
+| code | Ý nghĩa |
+|---|---|
+| `FORBIDDEN` | Người dùng không thuộc phòng hoặc không có quyền thao tác |
+| `NOT_FOUND` | Không tìm thấy tin nhắn |
+| `INVALID_CONTENT` | Nội dung hoặc emoji không hợp lệ |
+| `INTERNAL` | Lỗi máy chủ |
+
 ## 3. Nhóm
 
 | Hướng | type | Trường | Khi nào |

@@ -12,13 +12,25 @@ def user_out(u: dict) -> dict:
 
 
 def message_out(m: dict) -> dict:
+    reactions = {}
+    for emoji, users in (m.get("reactions") or {}).items():
+        reactions[emoji] = [str(uid) for uid in users]
+    content = m["content"]
+    if m.get("deleted_at"):
+        content = "[tin nhắn đã thu hồi]"
     return {
         "id": str(m["_id"]),
         "room_id": str(m["room_id"]),
         "sender": {"id": str(m["sender_id"]), "username": m["sender_name"]},
-        "msg_type": m.get("type", "text"),  # "text" | "image"
-        "content": m["content"],
+        "msg_type": m.get("type", "text"),
+        "content": content,
         "ts": iso(m["created_at"]),
+        "deleted": bool(m.get("deleted_at")),
+        "deleted_at": iso(m.get("deleted_at")),
+        "edited": bool(m.get("edited_at")),
+        "edited_at": iso(m.get("edited_at")),
+        "reactions": reactions,
+        "read_by": [str(uid) for uid in (m.get("read_by") or [])],
     }
 
 
