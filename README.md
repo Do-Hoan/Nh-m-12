@@ -1,6 +1,6 @@
 # RealChat - Chat thời gian thực bằng WebSocket
 
-Đồ án môn WebSocket. Ứng dụng chat có đăng ký/đăng nhập, chat 1-1, nhóm, gửi ảnh, gọi thoại/video 1-1 và gọi nhóm (WebRTC), chạy trên HTTPS/WSS để nhiều người cùng test qua Internet.
+Ứng dụng chat có đăng ký/đăng nhập, chat 1-1, nhóm, gửi ảnh, gọi thoại/video 1-1 và gọi nhóm (WebRTC), chạy trên HTTPS/WSS để nhiều người cùng test qua Internet.
 
 | Thành phần | Công nghệ |
 |---|---|
