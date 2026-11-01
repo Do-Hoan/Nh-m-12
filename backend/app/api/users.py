@@ -11,7 +11,10 @@ router = APIRouter(prefix="/api", tags=["users"])
 @router.get("/users")
 async def list_users(user=Depends(get_current_user)):
     """Danh sách người dùng khác (dùng để mở DM / chọn thành viên nhóm)."""
-    docs = await db.users.find({"_id": {"$ne": user["_id"]}}, {"username": 1}).sort("username", 1).to_list(1000)
+    docs = await db.users.find(
+        {"_id": {"$ne": user["_id"]}},
+        {"username": 1, "display_name": 1, "about": 1, "avatar_url": 1},
+    ).sort("username", 1).to_list(1000)
     return [user_out(d) for d in docs]
 
 

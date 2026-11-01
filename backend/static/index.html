@@ -25,19 +25,39 @@
 <!-- Ứng dụng chính -->
 <div id="app" class="hidden">
   <aside id="sidebar">
-    <div class="me">
-      <span><b id="meName"></b><small id="status">Đang kết nối...</small></span>
-      <button class="ghost small" id="logoutBtn">Đăng xuất</button>
+    <button type="button" id="sidebarToggle" title="Thu gọn danh sách" aria-label="Thu gọn danh sách" aria-controls="sidebar" aria-expanded="true">&#x2039;</button>
+    <div class="sidebar-search">
+      <span>⌕</span>
+      <input id="sidebarSearch" type="search"
+             placeholder="Tìm nhóm hoặc người dùng..."
+             autocomplete="off">
+      <button type="button" id="clearSearch" title="Xóa tìm kiếm">×</button>
     </div>
+
     <h2>Nhóm chat <button class="small" id="newGroupBtn" title="Tạo nhóm mới">+</button></h2>
     <div id="groups"></div>
     <h2>Người dùng <span id="onlineCount" class="muted"></span></h2>
     <div id="users"></div>
+
+    <div class="sidebar-footer">
+      <button id="profileBtn" class="profile-trigger" type="button" aria-haspopup="dialog">
+        <span id="meAvatar" class="profile-avatar" aria-hidden="true">?</span>
+        <span class="profile-trigger-copy">
+          <b id="meName"></b>
+          <small id="status">Đang kết nối...</small>
+        </span>
+      </button>
+      <button id="themeToggle" class="theme-toggle" type="button" aria-label="Chuyển sang giao diện tối"></button>
+      <button class="logout-icon" id="logoutBtn" type="button" title="Đăng xuất" aria-label="Đăng xuất">&#x21E5;</button>
+    </div>
   </aside>
+
+  <button id="sidebarBackdrop" class="sidebar-backdrop" type="button" aria-label="Đóng danh sách"></button>
 
   <main id="chat">
     <header id="chatHeader" class="hidden">
       <button class="icon back" id="backBtn" aria-label="Quay lại">&#8592;</button>
+      <button class="icon sidebar-menu" id="sidebarMenuBtn" type="button" title="Mở danh sách trò chuyện" aria-label="Mở danh sách trò chuyện" aria-controls="sidebar" aria-expanded="false">&#9776;</button>
       <div class="title"><b id="roomTitle"></b><small id="roomSub"></small></div>
       <button class="icon hidden" id="joinCallBtn">Tham gia cuộc gọi</button>
       <button class="icon" id="voiceBtn" title="Gọi thoại" aria-label="Gọi thoại">&#128222;</button>

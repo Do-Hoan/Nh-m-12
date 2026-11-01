@@ -5,8 +5,9 @@ from pymongo.errors import DuplicateKeyError
 
 from ..db import db, now
 from ..deps import get_current_user
-from ..models import user_out
+from ..models import iso, user_out
 from ..security import create_token, hash_password, verify_password
+from ..services.storage import is_allowed_image_url
 from ..ws.manager import manager
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -17,10 +18,18 @@ class AuthIn(BaseModel):
     password: str = Field(min_length=6, max_length=72)
 
 
+class ProfileUpdate(BaseModel):
+    display_name: str | None = Field(default=None, max_length=40)
+    about: str | None = Field(default=None, max_length=280)
+    avatar_url: str | None = Field(default=None, max_length=2048)
+
+
 def auth_response(user: dict) -> dict:
+    profile = user_out(user)
+    profile["created_at"] = iso(user.get("created_at"))
     return {
         "access_token": create_token(str(user["_id"]), user["username"]),
-        "user": user_out(user),
+        "user": profile,
     }
 
 
@@ -56,4 +65,34 @@ async def login(data: AuthIn):
 
 @router.get("/me")
 async def me(user=Depends(get_current_user)):
-    return user_out(user)
+    profile = user_out(user)
+    profile["created_at"] = iso(user.get("created_at"))
+    return profile
+
+
+@router.patch("/me")
+async def update_me(data: ProfileUpdate, user=Depends(get_current_user)):
+    fields = data.model_dump(exclude_unset=True)
+    if not fields:
+        raise HTTPException(400, "Không có thông tin nào để cập nhật")
+
+    updates = {}
+    if "display_name" in fields:
+        display_name = (fields["display_name"] or "").strip()
+        updates["display_name"] = display_name or None
+    if "about" in fields:
+        updates["about"] = (fields["about"] or "").strip()
+    if "avatar_url" in fields:
+        avatar_url = fields["avatar_url"]
+        if avatar_url is not None and not is_allowed_image_url(avatar_url):
+            raise HTTPException(400, "Ảnh đại diện phải được tải lên RealChat")
+        updates["avatar_url"] = avatar_url
+
+    updated = await db.users.find_one_and_update(
+        {"_id": user["_id"]},
+        {"$set": updates},
+        return_document=ReturnDocument.AFTER,
+    )
+    profile = user_out(updated)
+    profile["created_at"] = iso(updated.get("created_at"))
+    return profile
