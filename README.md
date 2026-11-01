@@ -98,17 +98,3 @@ Có thể dùng nhà cung cấp TURN khác (Twilio, coturn tự dựng), định
 └── demos/echo_server/  (chưa làm) demo WebSocket thuần
 ```
 
-## Hiện trạng và hạn chế
-
-Đã kiểm tra:
-- 27 test tự động (đăng ký/đăng nhập, WebSocket gửi tin, DM không trùng, nhóm, phân trang, upload, toàn bộ luồng signaling gọi 1-1 và gọi nhóm).
-- Chạy thật trên trình duyệt (MongoDB giả trong RAM): chat 1-1, unread, giao diện điện thoại, gọi video 1-1 và gọi nhóm 3 người kết nối WebRTC thành công (dùng camera/mic giả).
-
-Chưa kiểm tra / hạn chế:
-- **Chưa chạy với MongoDB Atlas, Cloudinary, GridFS và TURN thật** (cần tài khoản của bạn). Test dùng MongoDB giả; phần GridFS và Cloudinary chưa được chạy thử.
-- Chưa thử camera/mic thật và chưa thử gọi giữa hai mạng khác nhau; phụ thuộc vào TURN bạn cấu hình.
-- Chỉ chạy 1 worker/instance (trạng thái kết nối và cuộc gọi nằm trong RAM); redeploy hoặc server ngủ sẽ ngắt WebSocket và cuộc gọi.
-- Mesh nên tối đa 4 người; chất lượng giảm khi mạng yếu.
-- Ảnh GridFS truy cập qua URL công khai khó đoán (thẻ `<img>` không gửi được header). Chưa có giới hạn tần suất (rate limit), chưa có đổi mật khẩu/quên mật khẩu.
-- Số tin chưa đọc chỉ lưu ở trình duyệt. Khi bị xóa khỏi nhóm đang gọi, người đó chưa bị đá khỏi cuộc gọi.
-- Motor đã được MongoDB công bố ngừng phát triển (khuyến nghị chuyển sang PyMongo Async API); đề bài yêu cầu Motor nên vẫn dùng, ghim `motor<4`.
