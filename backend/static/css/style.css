@@ -968,6 +968,100 @@ header #joinCallBtn {
   font-size: 10px;
 }
 
+/* ===== MESSAGE ACTIONS / REACTIONS ===== */
+
+.message-content { position: relative; }
+
+.msg-meta {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.msg-meta time { margin-top: 0; }
+.msg-meta .edited { font-style: italic; }
+.msg-meta .seen { display: none; }
+.msg.seen-last .msg-meta .seen { display: inline; color: var(--accent); }
+
+.bubble.deleted {
+  background: transparent !important;
+  color: var(--muted) !important;
+  border: 1px dashed var(--line);
+  font-style: italic;
+}
+
+.reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.reaction {
+  padding: 1px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.reaction.mine { border-color: var(--accent); }
+
+.msg-actions {
+  position: absolute;
+  top: -14px;
+  display: none;
+  gap: 2px;
+  padding: 2px 4px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  z-index: 5;
+}
+
+.msg.mine .msg-actions { right: 0; }
+.msg:not(.mine) .msg-actions { left: 0; }
+.message-content:hover .msg-actions,
+.message-content:focus-within .msg-actions { display: flex; }
+
+.msg-actions button,
+.reaction-picker button {
+  padding: 2px 5px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.reaction-picker {
+  position: absolute;
+  top: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  width: 190px;
+  margin-top: 4px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.msg.mine .reaction-picker { right: 0; }
+
+.typing {
+  padding: 2px 18px 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-style: italic;
+}
+
 /* ===== COMPOSER ===== */
 
 #composer {

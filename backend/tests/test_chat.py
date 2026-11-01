@@ -161,3 +161,32 @@ def test_ice_servers_includes_turn(client, make_user, monkeypatch):
     a = make_user("anh")
     servers = client.get("/api/ice-servers", headers=a["h"]).json()["iceServers"]
     assert servers[1] == {"urls": ["turn:t.example:80", "turns:t.example:443"], "username": "u", "credential": "p"}
+
+
+def test_edit_delete_react_read_typing(client, make_user):
+    a, b = make_user("anh"), make_user("binh")
+    room = open_dm(client, a, b)
+    with client.websocket_connect(ws_url(a)) as wa, client.websocket_connect(ws_url(b)) as wb:
+        wa.send_json({"type": "message.send", "room_id": room["id"], "content": "hi"})
+        mid = drain_until(wb, "message.new")["id"]
+        drain_until(wa, "message.new")
+
+        wb.send_json({"type": "message.edit", "room_id": room["id"], "message_id": mid, "content": "x"})
+        assert drain_until(wb, "error")["code"] == "FORBIDDEN"
+
+        wa.send_json({"type": "message.edit", "room_id": room["id"], "message_id": mid, "content": "hello"})
+        assert drain_until(wb, "message.edited")["content"] == "hello"
+
+        wb.send_json({"type": "message.reaction", "room_id": room["id"], "message_id": mid, "emoji": "👍"})
+        assert drain_until(wa, "message.reaction")["reactions"]["👍"] == [b["id"]]
+
+        wb.send_json({"type": "message.read", "room_id": room["id"], "message_id": mid})
+        assert drain_until(wa, "message.read")["user_id"] == b["id"]
+
+        wa.send_json({"type": "typing.start", "room_id": room["id"]})
+        assert drain_until(wb, "typing.start")["username"] == "anh"
+
+        wa.send_json({"type": "message.delete", "room_id": room["id"], "message_id": mid})
+        assert drain_until(wb, "message.deleted")["deleted"] is True
+        wa.send_json({"type": "message.edit", "room_id": room["id"], "message_id": mid, "content": "again"})
+        assert drain_until(wa, "error")["code"] == "NOT_FOUND"

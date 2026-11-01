@@ -29,6 +29,7 @@ const S = {
   lost: false,
   hasMore: false,
   loadingOlder: false,
+  msgs: {},
 };
 
 const SIDEBAR_STORAGE_KEY = "realchat-sidebar-collapsed";
@@ -353,6 +354,35 @@ async function onEvent(event) {
 
     case "message.new":
       await onNewMessage(event);
+      break;
+
+    case "message.edited":
+      updateMessage({
+        id: event.id,
+        content: event.content,
+        edited: true,
+        edited_at: event.edited_at,
+      });
+      break;
+
+    case "message.deleted":
+    case "message.reaction":
+      updateMessage(event);
+      break;
+
+    case "message.read": {
+      if (event.user_id === S.me.id || !event.message_id) break;
+      const message = S.msgs[event.message_id];
+      if (message && !(message.read_by || []).includes(event.user_id)) {
+        message.read_by = [...(message.read_by || []), event.user_id];
+      }
+      applySeen();
+      break;
+    }
+
+    case "typing.start":
+    case "typing.stop":
+      onTyping(event);
       break;
 
     case "group.created":
@@ -784,10 +814,15 @@ function msgEl(message) {
     );
   }
 
+  S.msgs[message.id] = message;
+
   // Bong bóng tin nhắn
   const bubble = el("div");
 
-  if (message.msg_type === "image") {
+  if (message.deleted) {
+    bubble.className = "bubble deleted";
+    bubble.textContent = "Tin nhắn đã được thu hồi";
+  } else if (message.msg_type === "image") {
     bubble.className = "bubble img";
 
     const img = el("img", {
@@ -822,7 +857,21 @@ function msgEl(message) {
     textContent: fmtTime(message.ts),
   });
 
-  content.append(bubble, time);
+  content.append(bubble);
+
+  const reactions = reactionsEl(message);
+  if (reactions) content.append(reactions);
+
+  const meta = el("div", { className: "msg-meta" }, time);
+  if (message.edited && !message.deleted) {
+    meta.append(el("span", { className: "edited", textContent: "đã chỉnh sửa" }));
+  }
+  if (mine && !message.deleted) {
+    meta.append(el("span", { className: "seen", textContent: "Đã xem" }));
+  }
+  content.append(meta);
+
+  if (!message.deleted) content.append(actionsEl(message, mine));
 
   if (mine) {
     item.append(content, avatar);
@@ -832,6 +881,222 @@ function msgEl(message) {
 
   return item;
 }
+
+const REACTIONS = ["❤️", "😂", "👍", "👎", "😍", "😢", "😮", "🙏", "🔥", "👏"];
+
+function reactionsEl(message) {
+  const entries = Object.entries(message.reactions || {})
+    .filter(([, users]) => users.length);
+  if (message.deleted || !entries.length) return null;
+
+  const wrap = el("div", { className: "reactions" });
+  entries.forEach(([emoji, users]) => {
+    const chip = el("button", {
+      type: "button",
+      className: "reaction" + (users.includes(S.me.id) ? " mine" : ""),
+      textContent: `${emoji} ${users.length}`,
+    });
+    chip.onclick = () => sendReaction(message.id, emoji);
+    wrap.append(chip);
+  });
+  return wrap;
+}
+
+function actionsEl(message, mine) {
+  const bar = el("div", { className: "msg-actions" });
+
+  const react = el("button", {
+    type: "button",
+    title: "Thả cảm xúc",
+    textContent: "😊",
+  });
+  react.onclick = event => {
+    event.stopPropagation();
+    toggleReactionPicker(bar, message.id);
+  };
+  bar.append(react);
+
+  if (mine) {
+    if (message.msg_type !== "image") {
+      const edit = el("button", { type: "button", title: "Chỉnh sửa", textContent: "✏️" });
+      edit.onclick = () => {
+        const text = prompt("Chỉnh sửa tin nhắn", message.content);
+        if (text === null) return;
+        const trimmed = text.trim();
+        if (!trimmed || trimmed === message.content) return;
+        wsSend({
+          type: "message.edit",
+          room_id: message.room_id,
+          message_id: message.id,
+          content: trimmed,
+        });
+      };
+      bar.append(edit);
+    }
+
+    const del = el("button", { type: "button", title: "Thu hồi", textContent: "🗑️" });
+    del.onclick = () => {
+      if (!confirm("Thu hồi tin nhắn này?")) return;
+      wsSend({
+        type: "message.delete",
+        room_id: message.room_id,
+        message_id: message.id,
+      });
+    };
+    bar.append(del);
+  }
+
+  return bar;
+}
+
+function toggleReactionPicker(bar, messageId) {
+  const existing = bar.querySelector(".reaction-picker");
+  document.querySelectorAll(".reaction-picker").forEach(p => p.remove());
+  if (existing) return;
+
+  const picker = el("div", { className: "reaction-picker" });
+  REACTIONS.forEach(emoji => {
+    const btn = el("button", { type: "button", textContent: emoji });
+    btn.onclick = () => {
+      picker.remove();
+      sendReaction(messageId, emoji);
+    };
+    picker.append(btn);
+  });
+  bar.append(picker);
+}
+
+document.addEventListener("click", () => {
+  document.querySelectorAll(".reaction-picker").forEach(p => p.remove());
+});
+
+function sendReaction(messageId, emoji) {
+  if (!S.current) return;
+  wsSend({
+    type: "message.reaction",
+    room_id: S.current.id,
+    message_id: messageId,
+    emoji,
+  });
+}
+
+function updateMessage(patch) {
+  const old = S.msgs[patch.id];
+  if (!old) return;
+
+  const message = { ...old, ...patch };
+  const node = $("msgs").querySelector(`.msg[data-id="${patch.id}"]`);
+  if (!node) {
+    S.msgs[message.id] = message;
+    return;
+  }
+
+  const fresh = msgEl(message);
+  if (node.dataset.stick) fresh.dataset.stick = "1";
+  node.replaceWith(fresh);
+  applySeen();
+}
+
+// Đánh dấu "Đã xem" cho tin của mình từ đầu đến tin người khác đã đọc
+function applySeen() {
+  const items = [...$("msgs").querySelectorAll(".msg")];
+  let lastRead = -1;
+  items.forEach((item, index) => {
+    const message = S.msgs[item.dataset.id];
+    if (message && (message.read_by || []).some(id => id !== S.me.id)) {
+      lastRead = index;
+    }
+  });
+
+  let lastSeenMine = null;
+  items.forEach((item, index) => {
+    item.classList.remove("seen-last");
+    if (index <= lastRead && item.classList.contains("mine")) {
+      lastSeenMine = item;
+    }
+  });
+  if (lastSeenMine) lastSeenMine.classList.add("seen-last");
+}
+
+function markCurrentRead() {
+  if (!S.current || document.hidden) return;
+  const items = $("msgs").querySelectorAll(".msg");
+  const last = items[items.length - 1];
+  if (!last) return;
+  const message = S.msgs[last.dataset.id];
+  if (!message || (message.read_by || []).includes(S.me.id)) return;
+
+  message.read_by = [...(message.read_by || []), S.me.id];
+  wsSend({
+    type: "message.read",
+    room_id: S.current.id,
+    message_id: message.id,
+  });
+}
+
+document.addEventListener("visibilitychange", markCurrentRead);
+
+/* ---- Đang nhập ---- */
+
+const typingUsers = {};
+
+function renderTyping() {
+  let node = $("typingIndicator");
+  if (!node) {
+    node = el("div", { id: "typingIndicator", className: "typing hidden" });
+    $("composer").before(node);
+  }
+  const names = S.current
+    ? Object.values(typingUsers[S.current.id] || {}).map(t => t.name)
+    : [];
+  node.textContent = names.length
+    ? `${names.join(", ")} đang nhập...`
+    : "";
+  node.classList.toggle("hidden", !names.length);
+}
+
+function onTyping(event) {
+  if (event.user_id === S.me.id) return;
+  const room = (typingUsers[event.room_id] ||= {});
+  clearTimeout(room[event.user_id]?.timer);
+
+  if (event.type === "typing.start") {
+    room[event.user_id] = {
+      name: event.username,
+      timer: setTimeout(() => {
+        delete room[event.user_id];
+        renderTyping();
+      }, 5000),
+    };
+  } else {
+    delete room[event.user_id];
+  }
+  renderTyping();
+}
+
+let typingSentAt = 0;
+let typingStopTimer = null;
+
+function sendTypingStop() {
+  clearTimeout(typingStopTimer);
+  typingStopTimer = null;
+  if (typingSentAt && S.current) {
+    wsSend({ type: "typing.stop", room_id: S.current.id });
+  }
+  typingSentAt = 0;
+}
+
+$("text").addEventListener("input", () => {
+  if (!S.current) return;
+  if (!$("text").value.trim()) return sendTypingStop();
+
+  if (Date.now() - typingSentAt > 3000) {
+    typingSentAt = Date.now();
+    wsSend({ type: "typing.start", room_id: S.current.id });
+  }
+  clearTimeout(typingStopTimer);
+  typingStopTimer = setTimeout(sendTypingStop, 2000);
+});
 
 function addMessage(message) {
   const box = $("msgs");
@@ -877,6 +1142,11 @@ async function onNewMessage(event) {
     S.current.id === event.room_id
   ) {
     addMessage(event);
+    if (typingUsers[event.room_id]) {
+      delete typingUsers[event.room_id][event.sender.id];
+      renderTyping();
+    }
+    markCurrentRead();
   }
 
   if (
@@ -950,7 +1220,9 @@ async function openRoom(room, keepScroll = false) {
     box.scrollTop = box.scrollHeight;
 
     renderSidebar();
-
+    renderTyping();
+    applySeen();
+    markCurrentRead();
     if (
       !keepScroll &&
       window.innerWidth > 720
@@ -1038,6 +1310,7 @@ $("composer").onsubmit = event => {
 
   if (sendMessage("text", content)) {
     $("text").value = "";
+    sendTypingStop();
   }
 };
 
