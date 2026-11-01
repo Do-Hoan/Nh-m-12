@@ -106,9 +106,6 @@ async def on_message_read(user: dict, ws: WebSocket, data: dict) -> None:
         msg = None
 
     now_ts = now()
-    update = {"$addToSet": {"read_by": user["_id"]}}
-    if msg:
-        update["$set"] = {"updated_at": now_ts}
     await db.rooms.update_one({"_id": room["_id"]}, {"$set": {f"read_by.{str(user['_id'])}": now_ts}}, upsert=True)
     if msg:
         await db.messages.update_one({"_id": msg["_id"]}, {"$addToSet": {"read_by": user["_id"]}})
@@ -129,6 +126,11 @@ async def on_message_edit(user: dict, ws: WebSocket, data: dict) -> None:
         return await send_error(ws, "NOT_FOUND", "Tin nhắn không tồn tại")
     if str(msg["sender_id"]) != str(user["_id"]):
         return await send_error(ws, "FORBIDDEN", "Bạn không có quyền chỉnh sửa tin nhắn này")
+
+    if msg.get("deleted_at"):
+        return await send_error(ws, "NOT_FOUND", "Tin nhắn đã bị thu hồi")
+    if msg.get("type", "text") != "text":
+        return await send_error(ws, "INVALID_CONTENT", "Chỉ có thể chỉnh sửa tin nhắn văn bản")
 
     content = str(data.get("content", "")).strip()
     if not content or len(content) > MAX_MESSAGE_LEN:
@@ -174,6 +176,9 @@ async def on_message_reaction(user: dict, ws: WebSocket, data: dict) -> None:
     msg = await db.messages.find_one({"_id": to_oid(data.get("message_id")), "room_id": room["_id"]})
     if not msg:
         return await send_error(ws, "NOT_FOUND", "Tin nhắn không tồn tại")
+
+    if msg.get("deleted_at"):
+        return await send_error(ws, "NOT_FOUND", "Tin nhắn đã bị thu hồi")
 
     reactions = dict(msg.get("reactions") or {})
     users = list(reactions.get(emoji, []))
