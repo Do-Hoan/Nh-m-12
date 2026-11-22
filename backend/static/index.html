@@ -60,12 +60,20 @@
       <button class="icon sidebar-menu" id="sidebarMenuBtn" type="button" title="Mở danh sách trò chuyện" aria-label="Mở danh sách trò chuyện" aria-controls="sidebar" aria-expanded="false">&#9776;</button>
       <div class="title"><b id="roomTitle"></b><small id="roomSub"></small></div>
       <button class="icon hidden" id="joinCallBtn">Tham gia cuộc gọi</button>
+      <button class="icon" id="searchBtn" title="Tìm tin nhắn" aria-label="Tìm tin nhắn">&#128269;</button>
+      <button class="icon" id="notifyBtn" title="Bật thông báo" aria-label="Bật thông báo">&#128276;</button>
       <button class="icon" id="voiceBtn" title="Gọi thoại" aria-label="Gọi thoại">&#128222;</button>
       <button class="icon" id="videoBtn" title="Gọi video" aria-label="Gọi video">&#127909;</button>
       <button class="icon hidden" id="manageBtn" title="Thành viên nhóm" aria-label="Thành viên nhóm">&#9881;</button>
     </header>
+    <div id="messageSearch" class="hidden">
+      <input id="messageSearchInput" type="search" placeholder="Tìm trong cuộc trò chuyện..." autocomplete="off">
+      <button type="button" id="closeSearchBtn" title="Đóng tìm kiếm">×</button>
+    </div>
+    <div id="pinnedBar" class="hidden"></div>
     <div id="msgs"><div class="placeholder">Chọn một nhóm hoặc một người ở cột bên trái để bắt đầu trò chuyện.</div></div>
     <form id="composer" class="hidden">
+      <div id="mentionMenu" class="mention-menu hidden"></div>
       <input type="file" id="imgInput" accept="image/jpeg,image/png,image/gif,image/webp" class="hidden">
       <button type="button" class="icon" id="imgBtn" title="Gửi ảnh" aria-label="Gửi ảnh">&#128206;</button>
       <input id="text" placeholder="Nhập tin nhắn..." autocomplete="off" maxlength="2000">
@@ -97,6 +105,7 @@
   <div class="callBar">
     <button class="round" id="micBtn" title="Tắt/bật mic">Mic</button>
     <button class="round" id="camBtn" title="Tắt/bật camera">Camera</button>
+    <button class="round" id="shareBtn" title="Chia sẻ màn hình">Chia sẻ</button>
     <button class="round danger" id="hangBtn">Cúp máy</button>
   </div>
 </div>

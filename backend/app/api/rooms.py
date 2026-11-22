@@ -165,3 +165,22 @@ async def history(
         query["_id"] = {"$lt": b}  # ObjectId tăng dần theo thời gian -> dùng làm cursor
     msgs = await db.messages.find(query).sort("_id", -1).limit(limit).to_list(limit)
     return [message_out(m) for m in reversed(msgs)]
+
+
+@router.get("/{room_id}/messages/search")
+async def search_messages(
+    room_id: str,
+    q: str = Query(min_length=1, max_length=200),
+    limit: int = Query(30, ge=1, le=100),
+    user=Depends(get_current_user),
+):
+    oid = to_oid(room_id)
+    room = await db.rooms.find_one({"_id": oid, "members": user["_id"]}) if oid else None
+    if not room:
+        raise HTTPException(403, "Bạn không ở trong phòng này")
+    query = {
+        "room_id": oid,
+        "content": {"$regex": q.strip(), "$options": "i"},
+    }
+    msgs = await db.messages.find(query).sort("_id", -1).limit(limit).to_list(limit)
+    return [message_out(m) for m in reversed(msgs)]

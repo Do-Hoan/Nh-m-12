@@ -241,6 +241,7 @@ function showCallScreen() {
   $("callTitle").textContent = (c.isGroup ? "# " : "") + c.title + (c.media === "video" ? " - video" : " - thoại");
   $("tiles").replaceChildren();
   const t = makeTile("Bạn", { local: true });
+  c.localTile = t;
   t.video.srcObject = c.local;
   if (c.media === "audio") t.el.classList.add("audio");
   c.tiles = new Map();
@@ -296,3 +297,57 @@ function endCallLocal() {
 }
 
 window.addEventListener("beforeunload", () => { if (S.call && S.call.id) wsSend({ type: "call.end", call_id: S.call.id }); });
+
+/* ---------------- Chia sẻ màn hình ---------------- */
+async function startScreenShare() {
+  const c = S.call;
+  if (!c) return;
+  if (!navigator.mediaDevices?.getDisplayMedia)
+    return toast("Trình duyệt không hỗ trợ chia sẻ màn hình", true);
+
+  try {
+    const screen = await navigator.mediaDevices.getDisplayMedia({
+      video: { frameRate: { ideal: 30, max: 60 } },
+      audio: true,
+    });
+    c.screen = screen;
+    const screenTrack = screen.getVideoTracks()[0];
+    for (const p of c.peers.values()) {
+      screen.getTracks().forEach(track => p.pc.addTrack(track, screen));
+      await sendOffer(p);
+    }
+
+    const localTile = c.tiles?.get("local");
+    if (localTile) localTile.video.srcObject = screen;
+    const btn = $("shareBtn");
+    btn.textContent = "Dừng chia sẻ";
+    btn.classList.add("off");
+
+    screenTrack.addEventListener("ended", () => stopScreenShare(), { once: true });
+  } catch (error) {
+    if (error.name !== "NotAllowedError") toast(error.message || "Không thể chia sẻ màn hình", true);
+  }
+}
+
+async function stopScreenShare() {
+  const c = S.call;
+  if (!c?.screen) return;
+  c.screen.getTracks().forEach(track => track.stop());
+  c.screen = null;
+
+  for (const p of c.peers.values()) {
+    p.pc.getSenders()
+      .filter(sender => sender.track && sender.track.kind === "video" && c.local.getVideoTracks().includes(sender.track) === false)
+      .forEach(sender => p.pc.removeTrack(sender));
+    await sendOffer(p);
+  }
+
+  if (c.localTile) c.localTile.video.srcObject = c.local;
+  const btn = $("shareBtn");
+  btn.textContent = "Chia sẻ";
+  btn.classList.remove("off");
+}
+$("shareBtn").onclick = () => {
+  if (S.call?.screen) stopScreenShare();
+  else startScreenShare();
+};
