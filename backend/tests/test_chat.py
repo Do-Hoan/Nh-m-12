@@ -124,6 +124,7 @@ def test_cannot_leave_general(client, make_user):
 
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+WEBM = b"\x1a\x45\xdf\xa3" + b"\x00" * 32
 
 
 def test_upload_validation(client, make_user):
@@ -152,6 +153,37 @@ def test_upload_ok_and_image_message(client, make_user, monkeypatch):
     assert m["msg_type"] == "image" and m["content"] == "/api/files/abc"
 
 
+def test_upload_video_and_audio_and_reject_fake_mime(client, make_user, monkeypatch):
+    from app.services import storage
+
+    async def fake_save(media_type, filename, data):
+        if not storage.sniff_media(data, media_type):
+            raise storage.ImageError(415, "unsupported")
+        return f"/api/files/{media_type}"
+
+    monkeypatch.setattr(storage, "save_media", fake_save)
+    a = make_user("anh")
+    video = client.post("/api/upload", files={"file": ("clip.mp4", WEBM, "video/mp4")}, data={"msg_type": "video"}, headers=a["h"])
+    audio = client.post("/api/upload", files={"file": ("voice.webm", WEBM, "audio/webm")}, data={"msg_type": "audio"}, headers=a["h"])
+    fake = client.post("/api/upload", files={"file": ("clip.mp4", b"not-media", "video/mp4")}, data={"msg_type": "video"}, headers=a["h"])
+    assert video.status_code == 201 and video.json()["msg_type"] == "video"
+    assert audio.status_code == 201 and audio.json()["msg_type"] == "audio"
+    assert fake.status_code == 415
+
+
+def test_same_client_id_is_idempotent(client, make_user):
+    a, b = make_user("anh"), make_user("binh")
+    room = open_dm(client, a, b)
+    with client.websocket_connect(ws_url(a)) as wa:
+        payload = {"type": "message.send", "room_id": room["id"], "content": "once", "client_id": "retry-1"}
+        wa.send_json(payload)
+        first = drain_until(wa, "message.new")
+        wa.send_json(payload)
+        retry = drain_until(wa, "message.new")
+    assert retry["id"] == first["id"]
+    assert len(client.get(f"/api/rooms/{room['id']}/messages", headers=a["h"]).json()) == 1
+
+
 def test_ice_servers_includes_turn(client, make_user, monkeypatch):
     from app.api import users
 
@@ -161,3 +193,32 @@ def test_ice_servers_includes_turn(client, make_user, monkeypatch):
     a = make_user("anh")
     servers = client.get("/api/ice-servers", headers=a["h"]).json()["iceServers"]
     assert servers[1] == {"urls": ["turn:t.example:80", "turns:t.example:443"], "username": "u", "credential": "p"}
+
+
+def test_edit_delete_react_read_typing(client, make_user):
+    a, b = make_user("anh"), make_user("binh")
+    room = open_dm(client, a, b)
+    with client.websocket_connect(ws_url(a)) as wa, client.websocket_connect(ws_url(b)) as wb:
+        wa.send_json({"type": "message.send", "room_id": room["id"], "content": "hi"})
+        mid = drain_until(wb, "message.new")["id"]
+        drain_until(wa, "message.new")
+
+        wb.send_json({"type": "message.edit", "room_id": room["id"], "message_id": mid, "content": "x"})
+        assert drain_until(wb, "error")["code"] == "FORBIDDEN"
+
+        wa.send_json({"type": "message.edit", "room_id": room["id"], "message_id": mid, "content": "hello"})
+        assert drain_until(wb, "message.edited")["content"] == "hello"
+
+        wb.send_json({"type": "message.reaction", "room_id": room["id"], "message_id": mid, "emoji": "👍"})
+        assert drain_until(wa, "message.reaction")["reactions"]["👍"] == [b["id"]]
+
+        wb.send_json({"type": "message.read", "room_id": room["id"], "message_id": mid})
+        assert drain_until(wa, "message.read")["user_id"] == b["id"]
+
+        wa.send_json({"type": "typing.start", "room_id": room["id"]})
+        assert drain_until(wb, "typing.start")["username"] == "anh"
+
+        wa.send_json({"type": "message.delete", "room_id": room["id"], "message_id": mid})
+        assert drain_until(wb, "message.deleted")["deleted"] is True
+        wa.send_json({"type": "message.edit", "room_id": room["id"], "message_id": mid, "content": "again"})
+        assert drain_until(wa, "error")["code"] == "NOT_FOUND"
