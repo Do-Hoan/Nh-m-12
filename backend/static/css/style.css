@@ -1,4 +1,3 @@
-
 :root {
   color-scheme: light;
   --bg: #f3f5fb;
@@ -510,6 +509,66 @@ aside h2 {
   font-size: 12px;
 }
 
+/* ===== SEARCH / PIN / MENTION ===== */
+#messageSearch {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+#messageSearch input { flex: 1; }
+#closeSearchBtn { width: 38px; padding: 8px; border-radius: 50%; }
+#pinnedBar {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mention {
+  display: inline;
+  padding: 1px 4px;
+  border-radius: 5px;
+  background: rgba(99, 120, 245, .18);
+  color: inherit;
+  font-weight: 700;
+}
+#composer { position: relative; }
+.mention-menu {
+  position: absolute;
+  left: 58px;
+  bottom: calc(100% - 2px);
+  z-index: 20;
+  min-width: 220px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+.mention-menu button {
+  width: 100%;
+  display: block;
+  padding: 7px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+.search-hit { animation: searchFlash 1.8s ease; }
+@keyframes searchFlash {
+  0%, 100% { box-shadow: inherit; }
+  30% { box-shadow: 0 0 0 5px rgba(255, 196, 0, .45); }
+}
+
 /* ===== SIDEBAR SEARCH ===== */
 
 .sidebar-search {
@@ -622,7 +681,6 @@ aside h2 {
   color: #fff;
   font-size: 14px;
   font-weight: 750;
-  box-shadow: 0 3px 8px rgba(99,102,241,.18);
 }
 
 .sidebar-avatar.group-avatar {

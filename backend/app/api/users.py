@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel, Field
 
-from ..config import STUN_URLS, TURN_CREDENTIAL, TURN_URL, TURN_USERNAME
+from ..config import STUN_URLS, TURN_CREDENTIAL, TURN_URL, TURN_USERNAME, VAPID_PUBLIC_KEY
 from ..db import db
 from ..deps import get_current_user
 from ..models import user_out
@@ -31,3 +32,22 @@ async def ice_servers(user=Depends(get_current_user)):
             }
         )
     return {"iceServers": servers}
+
+
+class PushSubscription(BaseModel):
+    endpoint: str
+    keys: dict[str, str]
+
+
+@router.get("/push/vapid-public-key")
+async def push_vapid_public_key(user=Depends(get_current_user)):
+    return {"publicKey": VAPID_PUBLIC_KEY}
+
+
+@router.post("/push/subscription")
+async def save_push_subscription(data: PushSubscription, user=Depends(get_current_user)):
+    await db.users.update_one(
+        {"_id": user["_id"]},
+        {"$addToSet": {"push_subscriptions": data.model_dump()}},
+    )
+    return {"ok": True}
