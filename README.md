@@ -8,7 +8,7 @@
 | CSDL | MongoDB Atlas (free tier) |
 | Frontend | HTML/CSS/JS thuần, do chính FastAPI phục vụ (1 service) |
 | Gọi thoại/video | WebRTC, WebSocket làm kênh signaling, STUN + TURN |
-| Lưu ảnh | Cloudinary, hoặc MongoDB GridFS nếu không cấu hình Cloudinary |
+| Lưu media | Cloudinary (`image` cho ảnh, `video` cho video/audio), hoặc MongoDB GridFS nếu không cấu hình Cloudinary |
 | Xác thực | bcrypt + JWT (REST dùng header, WebSocket dùng `?token=`) |
 
 Tài liệu: [kiến trúc](docs/architecture.md) · [giao thức WebSocket](docs/protocol.md) · [mô hình dữ liệu](docs/data-model.md)
@@ -18,11 +18,32 @@ Tài liệu: [kiến trúc](docs/architecture.md) · [giao thức WebSocket](doc
 - Đăng ký, đăng nhập, đăng xuất; mọi người dùng mới tự vào phòng chung `general`.
 - Danh sách người dùng online/offline realtime, hỗ trợ nhiều tab.
 - Chat 1-1 (không bao giờ tạo trùng phòng cho một cặp), chat nhóm (tạo, thêm/xóa thành viên, rời nhóm).
-- Tin nhắn văn bản và hình ảnh (≤ 5MB; jpg/png/gif/webp); lịch sử phân trang cursor, cuộn lên để tải thêm.
+- Tin nhắn văn bản, hình ảnh, video và ghi âm (media ≤ 5MB); ảnh hỗ trợ jpg/png/gif/webp, video hỗ trợ mp4/webm/mov, ghi âm WebM/Opus hoặc MP4/M4A (tối đa 2 phút). Lịch sử phân trang cursor, cuộn lên để tải thêm.
 - Gọi thoại/video 1-1: popup gọi đến, từ chối, bận, không trả lời sau 30s, tắt/bật mic và camera, cúp máy.
 - Gọi nhóm (mesh, tối đa 4 người), vào/ra tùy ý, báo "đã đủ người" khi vượt giới hạn.
 - Tự kết nối lại WebSocket (backoff 1s → 15s) + heartbeat ping/pong.
 - Số tin chưa đọc (lưu phía client). Giao diện tiếng Việt, dùng được trên điện thoại.
+- Hồ sơ người dùng: đổi tên hiển thị, trạng thái cá nhân và ảnh đại diện; danh sách người dùng dùng để mở DM/chọn thành viên nhóm.
+- Tìm kiếm tin nhắn trong phòng; chỉnh sửa, thu hồi, reaction, ghim tin và đánh dấu đã đọc theo tin/thiết bị.
+- Tải ảnh trong tin nhắn; ảnh đại diện dùng URL ảnh đã tải lên RealChat.
+- Mentions trong tin nhắn và thông báo đẩy Web Push (cần cấu hình VAPID); thêm gợi ý mention trong giao diện.
+- Chia sẻ màn hình khi đang gọi video (nút bật/tắt, media WebRTC mesh).
+
+## API và thời gian thực
+
+- REST: đăng ký/đăng nhập/hồ sơ, danh sách người dùng, phòng chat và lịch sử/tìm kiếm tin nhắn, tải ảnh/video/audio, cấu hình ICE và Web Push.
+- WebSocket duy nhất tại `/ws?token=<JWT>`: presence, typing, gửi/chỉnh sửa/thu hồi tin nhắn, reaction, ghim tin, read receipt, đồng bộ nhóm và signaling WebRTC.
+- Các endpoint chính: `/api/auth/*`, `/api/users`, `/api/rooms/*`, `/api/upload`, `/api/ice-servers`, `/api/push/*`; xem chi tiết trong tài liệu giao thức.
+- Đăng xuất là thao tác phía client: xóa token, đóng WebSocket và quay về màn hình đăng nhập; server không có endpoint `/api/auth/logout`.
+
+## Biến môi trường bổ sung
+
+Ngoài MongoDB, JWT, CORS và Cloudinary, project hỗ trợ:
+
+- STUN/TURN: `STUN_URLS`, `TURN_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL`.
+- Web Push: `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`.
+- Cuộc gọi/chat: `CALL_RING_TIMEOUT` (mặc định 30 giây), `MAX_CALL_PARTICIPANTS` (mặc định 4), `WS_IDLE_TIMEOUT` (mặc định 60 giây).
+- `MAX_MESSAGE_LEN` là giới hạn nội dung tin nhắn nội bộ (mặc định 2000 ký tự).
 
 ## Chạy local (để phát triển)
 
@@ -80,7 +101,7 @@ Có thể dùng nhà cung cấp TURN khác (Twilio, coturn tự dựng), định
 2. Mở trang chính, đăng ký 2 tài khoản trên 2 thiết bị (ví dụ laptop và điện thoại 4G).
 3. Gửi tin nhắn, gửi ảnh; kiểm tra chấm xanh online đổi theo thời gian thực.
 4. Gọi thoại, gọi video giữa hai thiết bị khác mạng. Nếu bị kẹt "Đang kết nối..." mãi thì thường do thiếu/sai TURN: mở `https://<app>/api/ice-servers` (khi đã đăng nhập, gọi kèm token) để xem có mục `turn:` không, hoặc dùng <https://webrtc.github.io/samples/src/content/peerconnection/trickle-ice/> để thử thông tin TURN.
-5. Tạo nhóm 3 người rồi gọi nhóm; người thứ 5 vào phải thấy thông báo "đã đủ 4 người".
+5. Tạo nhóm 3 người rồi gọi nhóm; khi cuộc gọi đã có 4 người tham gia, người thứ 5 nhận thông báo "đã đủ 4 người".
 
 ## Cấu trúc thư mục
 

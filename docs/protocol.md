@@ -25,6 +25,8 @@ Server cũng tự đóng kết nối nếu 60 giây không nhận được gì (
 // C→S  gửi tin
 { "type": "message.send", "room_id": "...", "msg_type": "text",  "content": "Xin chào", "client_id": "abc" }
 { "type": "message.send", "room_id": "...", "msg_type": "image", "content": "https://res.cloudinary.com/.../a.jpg", "client_id": "abd" }
+{ "type": "message.send", "room_id": "...", "msg_type": "video", "content": "https://res.cloudinary.com/.../clip.mp4", "duration": 12, "client_id": "abe" }
+{ "type": "message.send", "room_id": "...", "msg_type": "audio", "content": "/api/files/FILE_ID?token=JWT", "duration": 8, "client_id": "abf" }
 
 // S→C  tới MỌI thành viên đang online của phòng (kể cả người gửi, mọi tab)
 { "type": "message.new", "id": "...", "room_id": "...", "sender": {"id": "...", "username": "an"},
@@ -33,7 +35,12 @@ Server cũng tự đóng kết nối nếu 60 giây không nhận được gì (
 
 Server xử lý theo đúng thứ tự: **(1) kiểm tra người gửi thuộc phòng → (2) lưu MongoDB → (3) mới broadcast**. Tin ảnh chỉ chấp nhận URL do chính hệ thống cấp (Cloudinary của mình hoặc `/api/files/...`), không nhận URL tùy ý.
 
-Ảnh được gửi bằng 2 bước: `POST /api/upload` (multipart, tối đa 5MB, jpg/png/gif/webp, kiểm tra cả "magic bytes") → nhận `{"url"}` → gửi `message.send` với `msg_type: image`.
+Ảnh/video/audio được gửi bằng 2 bước: `POST /api/upload` (multipart, tối đa 5MB, kèm `kind=image|video|audio` và `room_id`) → nhận `{"url", "msg_type", "content_type"}` → gửi `message.send` với `msg_type` tương ứng.
+
+- Ảnh: jpg/png/gif/webp, nhận diện bằng magic bytes.
+- Video: mp4/webm/mov, tối đa 5MB.
+- Audio: ghi âm WebM/Opus hoặc MP4/M4A, tối đa 5MB và tối đa 120 giây ở trình duyệt.
+- Tin audio/video có thể kèm `duration` (giây, số nguyên) để hiển thị thời lượng.
 
 ## 2.1. Chỉ báo đang gõ (Typing Indicator)
 
@@ -233,7 +240,18 @@ Quy tắc:
 - Reaction được lưu trong MongoDB tại trường `reactions`.
 - Server broadcast thay đổi đến các thành viên trong phòng.
 
-## 2.6. Kiểm tra quyền và xử lý lỗi
+## 2.6. Ghim tin nhắn (Message Pin)
+
+Thành viên trong phòng có thể ghim hoặc bỏ ghim một tin nhắn cho chính mình.
+
+| Hướng | type | Trường | Ý nghĩa |
+|---|---|---|---|
+| C→S | `message.pin` | `room_id`, `message_id` | Ghim nếu chưa ghim, bỏ ghim nếu đã ghim |
+| S→C | `message.pinned` | `room_id`, `message_id`, `pinned_by` | Đồng bộ danh sách người ghim cho tất cả thành viên |
+
+Server lưu trạng thái ghim trong `messages.pinned_by`. Khi người dùng gửi lại sự kiện trên cùng tin nhắn, server gỡ ID người dùng khỏi danh sách.
+
+## 2.7. Kiểm tra quyền và xử lý lỗi
 
 Server phải kiểm tra người dùng thuộc phòng trước khi thực hiện các thao tác theo phòng.
 

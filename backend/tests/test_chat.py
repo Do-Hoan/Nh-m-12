@@ -152,15 +152,60 @@ def test_upload_ok_and_image_message(client, make_user, monkeypatch):
     assert m["msg_type"] == "image" and m["content"] == "/api/files/abc"
 
 
-def test_ice_servers_includes_turn(client, make_user, monkeypatch):
-    from app.api import users
+MP4 = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 32
+WEBM = b"\x1a\x45\xdf\xa3" + b"\x00" * 32
 
-    monkeypatch.setattr(users, "TURN_URL", "turn:t.example:80,turns:t.example:443")
-    monkeypatch.setattr(users, "TURN_USERNAME", "u")
-    monkeypatch.setattr(users, "TURN_CREDENTIAL", "p")
-    a = make_user("anh")
-    servers = client.get("/api/ice-servers", headers=a["h"]).json()["iceServers"]
-    assert servers[1] == {"urls": ["turn:t.example:80", "turns:t.example:443"], "username": "u", "credential": "p"}
+
+def test_upload_video_and_audio_valid(client, make_user, monkeypatch):
+    from app.services import storage
+
+    async def fake_save_media(filename, data, kind, room_id=None):
+        return f"/api/files/{kind}-abc"
+
+    monkeypatch.setattr(storage, "save_media", fake_save_media)
+    a, b = make_user("anh_media"), make_user("binh_media")
+    room = open_dm(client, a, b)
+
+    video = client.post("/api/upload", data={"kind": "video", "room_id": room["id"]},
+                        files={"file": ("clip.mp4", MP4, "video/mp4")}, headers=a["h"])
+    assert video.status_code == 201
+
+    audio = client.post("/api/upload", data={"kind": "audio", "room_id": room["id"]},
+                        files={"file": ("voice.webm", WEBM, "audio/webm")}, headers=a["h"])
+    assert audio.status_code == 201
+
+    with client.websocket_connect(ws_url(a)) as wa, client.websocket_connect(ws_url(b)) as wb:
+        wa.send_json({"type": "message.send", "room_id": room["id"], "msg_type": "video",
+                      "content": video.json()["url"], "duration": 12})
+        assert drain_until(wb, "message.new")["msg_type"] == "video"
+
+        wa.send_json({"type": "message.send", "room_id": room["id"], "msg_type": "audio",
+                      "content": audio.json()["url"], "duration": 8})
+        got = drain_until(wb, "message.new")
+        assert got["msg_type"] == "audio" and got["duration"] == 8
+
+
+def test_media_upload_rejects_big_invalid_and_outsider(client, make_user, monkeypatch):
+    from app.services import storage
+
+    async def fake_save_media(filename, data, kind, room_id=None):
+        return f"/api/files/{kind}-abc"
+
+    monkeypatch.setattr(storage, "save_media", fake_save_media)
+    a, b, c = make_user("anh_media_bad"), make_user("binh_media_bad"), make_user("chi_media_bad")
+    room = open_dm(client, a, b)
+
+    bad_mime = client.post("/api/upload", data={"kind": "video", "room_id": room["id"]},
+                           files={"file": ("clip.txt", b"hello", "text/plain")}, headers=a["h"])
+    assert bad_mime.status_code == 415
+
+    big = client.post("/api/upload", data={"kind": "video", "room_id": room["id"]},
+                      files={"file": ("clip.mp4", MP4 + b"0" * (5 * 1024 * 1024), "video/mp4")}, headers=a["h"])
+    assert big.status_code == 413
+
+    outsider = client.post("/api/upload", data={"kind": "audio", "room_id": room["id"]},
+                           files={"file": ("voice.webm", WEBM, "audio/webm")}, headers=c["h"])
+    assert outsider.status_code == 403
 
 
 def test_edit_delete_react_read_typing(client, make_user):

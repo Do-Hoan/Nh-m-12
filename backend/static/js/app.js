@@ -12,7 +12,10 @@ const $ = id => document.getElementById(id);
 
 const PAGE = 30;
 const MAX_IMG = 5 * 1024 * 1024;
+const MAX_MEDIA = 5 * 1024 * 1024;
+const MAX_AUDIO_SECONDS = 120;
 const IMG_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+const VIDEO_TYPES = ["video/mp4", "video/webm", "video/quicktime"];
 
 const S = {
   token: localStorage.getItem("token"),
@@ -823,29 +826,18 @@ function msgEl(message) {
     bubble.textContent = "Tin nhắn đã được thu hồi";
   } else if (message.msg_type === "image") {
     bubble.className = "bubble img";
-
-    const img = el("img", {
-      src: message.content,
-      alt: "Ảnh",
-      loading: "lazy",
-    });
-
-    img.onclick = () => {
-      window.open(
-        message.content,
-        "_blank",
-        "noopener"
-      );
-    };
-
-    img.onload = () => {
-      if (item.dataset.stick) {
-        $("msgs").scrollTop =
-          $("msgs").scrollHeight;
-      }
-    };
-
+    const img = el("img", { src: message.content, alt: "Ảnh", loading: "lazy" });
+    img.onclick = () => window.open(message.content, "_blank", "noopener");
     bubble.append(img);
+  } else if (message.msg_type === "video") {
+    bubble.className = "bubble media";
+    const video = el("video", { src: message.content, controls: "", preload: "metadata", playsinline: "" });
+    bubble.append(video);
+    if (message.duration) bubble.append(el("span", { className: "media-duration", textContent: `Thời lượng ${formatDuration(message.duration)}` }));
+  } else if (message.msg_type === "audio") {
+    bubble.className = "bubble media audio";
+    bubble.append(el("audio", { src: message.content, controls: "", preload: "metadata" }));
+    bubble.append(el("span", { className: "media-duration", textContent: `Ghi âm · ${formatDuration(message.duration)}` }));
   } else {
     bubble.className = "bubble";
     bubble.append(...renderMentionParts(message.content));
@@ -1350,57 +1342,249 @@ function sendMessage(msgType, content) {
   return success;
 }
 
-/* ======================== SEND IMAGE ======================== */
+/* ======================== SEND IMAGE / VIDEO ======================== */
 
-$("imgBtn").onclick = () => {
-  $("imgInput").click();
-};
+$("imgBtn").onclick = () => $("imgInput").click();
 
 $("imgInput").onchange = async () => {
   const file = $("imgInput").files[0];
-
   $("imgInput").value = "";
-
   if (!file || !S.current) return;
+  if (!IMG_TYPES.includes(file.type)) return toast("Chỉ hỗ trợ ảnh JPG, PNG, GIF, WEBP", true);
+  if (file.size > MAX_IMG) return toast("Ảnh vượt quá 5MB", true);
+  await uploadMedia(file, "image", "Đang tải ảnh lên...");
+};
 
-  if (!IMG_TYPES.includes(file.type)) {
-    toast("Chỉ hỗ trợ ảnh JPG, PNG, GIF, WEBP", true);
-    return;
+$("videoMessageBtn").onclick = () => $("videoInput").click();
+$("videoInput").onchange = async () => {
+  const file = $("videoInput").files[0];
+  $("videoInput").value = "";
+  if (!file || !S.current) return;
+  if (!VIDEO_TYPES.includes(file.type) && !/\.(mp4|webm|mov)$/i.test(file.name)) {
+    return toast("Chỉ hỗ trợ video MP4, WebM hoặc MOV", true);
+  }
+  if (file.size > MAX_MEDIA) return toast("Video vượt quá 5MB", true);
+  await uploadMedia(file, "video", "Đang tải video lên...");
+};
+
+async function uploadMedia(file, kind, statusText) {
+  toast(statusText);
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("kind", kind);
+  formData.append("room_id", S.current.id);
+
+  try {
+    const data = await uploadWithProgress("/api/upload", formData);
+    let content = data.url;
+    if (content.startsWith("/api/files/")) {
+      content += (content.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(S.token);
+    }
+    const duration = kind === "video" ? await getVideoDuration(file) : undefined;
+    sendMediaMessage(kind, content, duration);
+  } catch (error) {
+    toast(error.message || "Tải file thất bại", true);
+  }
+}
+
+function sendMediaMessage(kind, content, duration) {
+  wsSend({
+    type: "message.send",
+    room_id: S.current.id,
+    msg_type: kind,
+    content,
+    duration,
+    client_id: Date.now() + "-" + Math.random().toString(36).slice(2),
+  });
+}
+
+function uploadWithProgress(url, formData) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.setRequestHeader("Authorization", "Bearer " + S.token);
+    xhr.upload.onprogress = event => {
+      if (event.lengthComputable) {
+        toast(`Đang tải lên... ${Math.round(event.loaded / event.total * 100)}%`);
+      }
+    };
+    xhr.onload = () => {
+      let data = {};
+      try { data = JSON.parse(xhr.responseText); } catch (_) {}
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+      else reject(new Error(typeof data.detail === "string" ? data.detail : "Tải file thất bại"));
+    };
+    xhr.onerror = () => reject(new Error("Mất kết nối khi tải file. Hãy thử lại."));
+    xhr.send(formData);
+  });
+}
+
+function getVideoDuration(file) {
+  return new Promise(resolve => {
+    const video = document.createElement("video");
+    video.preload = "metadata";
+    video.onloadedmetadata = () => {
+      resolve(Number.isFinite(video.duration) ? Math.round(video.duration) : null);
+      URL.revokeObjectURL(video.src);
+    };
+    video.onerror = () => resolve(null);
+    video.src = URL.createObjectURL(file);
+  });
+}
+
+/* ======================== RECORD AUDIO ======================== */
+
+let mediaRecorder = null;
+let audioStream = null;
+let audioChunks = [];
+let recorderTimer = null;
+let recorderSeconds = 0;
+let recordedBlob = null;
+let recorderPreviewUrl = null;
+
+function getAudioMimeType() {
+  const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
+  return candidates.find(type => window.MediaRecorder && MediaRecorder.isTypeSupported(type)) || "";
+}
+
+function formatDuration(seconds) {
+  const safe = Math.max(0, Math.round(seconds || 0));
+  return `${Math.floor(safe / 60)}:${String(safe % 60).padStart(2, "0")}`;
+}
+
+function showRecorderPanel(preview = false) {
+  let panel = $("recordPanel");
+  if (!panel) {
+    panel = document.createElement("div");
+    panel.id = "recordPanel";
+    $("composer").insertBefore(panel, $("text"));
+  }
+  panel.replaceChildren();
+  panel.className = "record-panel";
+  panel.append(el("span", {
+    className: "record-status",
+    textContent: preview ? `Tin ghi âm · ${formatDuration(recorderSeconds)}` : `Đang ghi · ${formatDuration(recorderSeconds)}`,
+  }));
+
+  if (preview && recorderPreviewUrl) {
+    const audio = el("audio", { controls: "" });
+    audio.src = recorderPreviewUrl;
+    panel.append(audio);
   }
 
-  if (file.size > MAX_IMG) {
-    toast("Ảnh vượt quá 5MB", true);
-    return;
+  const cancel = el("button", { type: "button", textContent: "Hủy" });
+  cancel.onclick = stopAndCancelRecording;
+  panel.append(cancel);
+
+  if (preview) {
+    const send = el("button", { type: "button", textContent: "Gửi", className: "record-send" });
+    send.onclick = sendRecordedAudio;
+    panel.append(send);
+  } else {
+    const stop = el("button", { type: "button", textContent: "Dừng", className: "record-send" });
+    stop.onclick = stopRecording;
+    panel.append(stop);
+  }
+}
+
+async function startRecording() {
+  if (!S.current) return;
+  if (!window.isSecureContext) return toast("Ghi âm cần truy cập bằng HTTPS hoặc localhost", true);
+  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+    return toast("Trình duyệt không hỗ trợ ghi âm", true);
   }
 
-  toast("Đang tải ảnh lên...");
+  try {
+    audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mimeType = getAudioMimeType();
+    mediaRecorder = mimeType ? new MediaRecorder(audioStream, { mimeType }) : new MediaRecorder(audioStream);
+    audioChunks = [];
+    recorderSeconds = 0;
+    recordedBlob = null;
+
+    mediaRecorder.ondataavailable = event => {
+      if (event.data.size) audioChunks.push(event.data);
+    };
+    mediaRecorder.onstop = () => {
+      recordedBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType || "audio/webm" });
+      if (recordedBlob.size > MAX_MEDIA) {
+        stopAndCancelRecording();
+        toast("Tin ghi âm vượt quá 5MB", true);
+        return;
+      }
+      if (recorderPreviewUrl) URL.revokeObjectURL(recorderPreviewUrl);
+      recorderPreviewUrl = URL.createObjectURL(recordedBlob);
+      showRecorderPanel(true);
+      audioStream?.getTracks().forEach(track => track.stop());
+    };
+
+    mediaRecorder.start();
+    showRecorderPanel(false);
+    clearInterval(recorderTimer);
+    recorderTimer = setInterval(() => {
+      recorderSeconds += 1;
+      showRecorderPanel(false);
+      if (recorderSeconds >= 120) stopRecording();
+    }, 1000);
+  } catch (error) {
+    const denied = error?.name === "NotAllowedError" || error?.name === "PermissionDeniedError";
+    toast(denied ? "Bạn đã từ chối quyền micro. Hãy cấp quyền micro trong trình duyệt." : "Không thể mở micro. Kiểm tra thiết bị hoặc HTTPS.", true);
+  }
+}
+
+function stopRecording() {
+  clearInterval(recorderTimer);
+  recorderTimer = null;
+  if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
+}
+
+function stopAndCancelRecording() {
+  clearInterval(recorderTimer);
+  recorderTimer = null;
+  if (mediaRecorder && mediaRecorder.state !== "inactive") {
+    mediaRecorder.onstop = null;
+    mediaRecorder.stop();
+  }
+  audioStream?.getTracks().forEach(track => track.stop());
+  mediaRecorder = null;
+  audioStream = null;
+  recordedBlob = null;
+  if (recorderPreviewUrl) URL.revokeObjectURL(recorderPreviewUrl);
+  recorderPreviewUrl = null;
+  $("recordPanel")?.remove();
+}
+
+async function sendRecordedAudio() {
+  if (!recordedBlob || !S.current) return;
+  const mimeType = recordedBlob.type || "audio/webm";
+  const extension = mimeType.includes("mp4") ? "m4a" : "webm";
+  const file = new File([recordedBlob], `voice-${Date.now()}.${extension}`, { type: mimeType });
+  $("recordPanel")?.remove();
 
   const formData = new FormData();
   formData.append("file", file);
+  formData.append("kind", "audio");
+  formData.append("room_id", S.current.id);
 
   try {
-    const res = await fetch("/api/upload", {
-      method: "POST",
-      headers: {
-        Authorization: "Bearer " + S.token,
-      },
-      body: formData,
-    });
-
-    const data = await res.json().catch(() => ({}));
-
-    if (!res.ok) {
-      throw new Error(
-        typeof data.detail === "string"
-          ? data.detail
-          : "Tải ảnh thất bại"
-      );
+    const data = await uploadWithProgress("/api/upload", formData);
+    let content = data.url;
+    if (content.startsWith("/api/files/")) {
+      content += (content.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(S.token);
     }
-
-    sendMessage("image", data.url);
+    sendMediaMessage("audio", content, recorderSeconds);
   } catch (error) {
-    toast(error.message, true);
+    toast(error.message || "Tải tin ghi âm thất bại", true);
+  } finally {
+    recordedBlob = null;
+    if (recorderPreviewUrl) URL.revokeObjectURL(recorderPreviewUrl);
+    recorderPreviewUrl = null;
   }
+}
+
+$("recordBtn").onclick = () => {
+  if (mediaRecorder && mediaRecorder.state !== "inactive") stopRecording();
+  else startRecording();
 };
 
 /* ======================== MODAL ======================== */
@@ -1607,355 +1791,16 @@ function renderProfileEditor() {
       }
 
       S.me = await api("/api/auth/me", "PATCH", updates);
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-      renderAccountSidebar();
-      S.rooms = S.rooms.map(room => ({
-        ...room,
-        members: room.members.map(member =>
-          member.id === S.me.id ? { ...member, ...S.me } : member
-        ),
-      }));
-      if (S.current) {
-        S.current = S.rooms.find(room => room.id === S.current.id) || S.current;
+      if (S.me.avatar_url) {
+        updateAvatarElement($("meAvatar"), S.me);
       }
-      renderSidebar();
-      if (S.current) renderHeader();
-      toast("Đã cập nhật hồ sơ");
-      renderProfileView();
+      closeModal();
+      toast("Cập nhật hồ sơ thành công");
     } catch (error) {
+      toast(error.message, true);
+    } finally {
       save.disabled = false;
       save.textContent = "Lưu";
-      toast(error.message, true);
     }
   };
-
-  showProfileDialog(form);
-}
-
-$("profileBtn").onclick = openProfile;
-
-/* ======================== GROUP CHECKLIST ======================== */
-
-function checklist(users) {
-  const box = el("div", {
-    className: "checklist",
-  });
-
-  if (!users.length) {
-    box.append(
-      el("div", {
-        className: "empty",
-        textContent: "Không có ai để chọn",
-      })
-    );
-  }
-
-  users.forEach(user => {
-    const checkbox = el("input", {
-      type: "checkbox",
-      value: user.id,
-    });
-
-    box.append(
-      el("label", {}, checkbox, user.username)
-    );
-  });
-
-  return box;
-}
-
-const checked = box =>
-  [...box.querySelectorAll("input:checked")]
-    .map(input => input.value);
-
-/* ======================== CREATE GROUP ======================== */
-
-$("newGroupBtn").onclick = () => {
-  const name = el("input", {
-    placeholder: "Tên nhóm",
-    maxLength: 40,
-  });
-
-  const list = checklist(S.users);
-
-  const create = el("button", {
-    textContent: "Tạo nhóm",
-  });
-
-  create.onclick = async () => {
-    try {
-      const room = await api(
-        "/api/rooms/group",
-        "POST",
-        {
-          name: name.value.trim(),
-          member_ids: checked(list),
-        }
-      );
-
-      upsertRoom(room);
-      closeModal();
-      openRoom(room);
-    } catch (error) {
-      toast(error.message, true);
-    }
-  };
-
-  const cancel = el("button", {
-    className: "ghost",
-    textContent: "Hủy",
-    onclick: closeModal,
-  });
-
-  openModal(
-    el("h3", { textContent: "Tạo nhóm chat" }),
-    name,
-    el("small", {
-      className: "muted",
-      textContent: "Chọn thành viên:",
-    }),
-    list,
-    el("div", { className: "row" }, cancel, create)
-  );
-};
-
-/* ======================== MANAGE GROUP ======================== */
-
-$("manageBtn").onclick = () => {
-  const room = S.current;
-
-  if (!room || room.type !== "group") return;
-
-  const isOwner =
-    room.created_by === S.me.id &&
-    !room.is_default;
-
-  const members = el("div", {
-    className: "checklist",
-  });
-
-  room.members.forEach(member => {
-    const row = el(
-      "div",
-      { className: "memberRow" },
-      el("span", {
-        textContent:
-          member.username +
-          (member.id === room.created_by
-            ? " (người tạo)"
-            : "") +
-          (member.id === S.me.id
-            ? " (bạn)"
-            : ""),
-      })
-    );
-
-    if (isOwner && member.id !== S.me.id) {
-      row.append(
-        el("button", {
-          className: "danger small",
-          textContent: "Xóa",
-
-          onclick: async () => {
-            try {
-              const updated = await api(
-                `/api/rooms/${room.id}/members/${member.id}`,
-                "DELETE"
-              );
-
-              upsertRoom(updated);
-              $("manageBtn").onclick();
-            } catch (error) {
-              toast(error.message, true);
-            }
-          },
-        })
-      );
-    }
-
-    members.append(row);
-  });
-
-  const nodes = [
-    el("h3", {
-      textContent: "# " + room.name,
-    }),
-    members,
-  ];
-
-  if (isOwner) {
-    const candidates = S.users.filter(user =>
-      !room.members.some(member => member.id === user.id)
-    );
-
-    const list = checklist(candidates);
-
-    nodes.push(
-      el("small", {
-        className: "muted",
-        textContent: "Thêm thành viên:",
-      }),
-      list,
-
-      el("button", {
-        textContent: "Thêm đã chọn",
-
-        onclick: async () => {
-          const ids = checked(list);
-
-          if (!ids.length) return;
-
-          try {
-            const updated = await api(
-              `/api/rooms/${room.id}/members`,
-              "POST",
-              { user_ids: ids }
-            );
-
-            upsertRoom(updated);
-            $("manageBtn").onclick();
-          } catch (error) {
-            toast(error.message, true);
-          }
-        },
-      })
-    );
-  }
-
-  const actions = el("div", {
-    className: "row",
-  });
-
-  if (!room.is_default) {
-    actions.append(
-      el("button", {
-        className: "danger",
-        textContent: "Rời nhóm",
-
-        onclick: async () => {
-          if (!confirm("Bạn chắc chắn muốn rời nhóm này?")) {
-            return;
-          }
-
-          try {
-            await api(
-              `/api/rooms/${room.id}/leave`,
-              "POST"
-            );
-
-            closeModal();
-            closeChat();
-            await refreshSidebar();
-          } catch (error) {
-            toast(error.message, true);
-          }
-        },
-      })
-    );
-  }
-
-  actions.append(
-    el("button", {
-      className: "ghost",
-      textContent: "Đóng",
-      onclick: closeModal,
-    })
-  );
-
-  openModal(...nodes, actions);
-};
-
-/* ======================== SEARCH / PIN / MENTION / NOTIFICATION ======================== */
-
-function renderPinnedBar() {
-  if (!S.current) return;
-  const pinned = Object.values(S.msgs).filter(m => m.room_id === S.current.id && (m.pinned_by || []).length);
-  const bar = $("pinnedBar");
-  if (!pinned.length) { bar.classList.add("hidden"); bar.replaceChildren(); return; }
-  bar.classList.remove("hidden");
-  const m = pinned[pinned.length - 1];
-  bar.replaceChildren(el("span", { textContent: "📌 " + (m.content || "Tin nhắn") }));
-  bar.onclick = () => {
-    const node = $(`msgs`).querySelector(`.msg[data-id="${m.id}"]`);
-    if (node) { node.scrollIntoView({ behavior: "smooth", block: "center" }); node.classList.add("search-hit"); setTimeout(() => node.classList.remove("search-hit"), 1800); }
-  };
-}
-
-$("searchBtn").onclick = () => {
-  $("messageSearch").classList.toggle("hidden");
-  if (!$("messageSearch").classList.contains("hidden")) $("messageSearchInput").focus();
-};
-$("closeSearchBtn").onclick = () => {
-  $("messageSearch").classList.add("hidden");
-  $("messageSearchInput").value = "";
-  if (S.current) openRoom(S.current);
-};
-let searchTimer = null;
-$("messageSearchInput").addEventListener("input", () => {
-  clearTimeout(searchTimer);
-  const q = $("messageSearchInput").value.trim();
-  if (!q || !S.current) return;
-  searchTimer = setTimeout(async () => {
-    try {
-      const list = await api(`/api/rooms/${S.current.id}/messages/search?q=${encodeURIComponent(q)}&limit=100`);
-      const box = $("msgs"); box.replaceChildren();
-      if (!list.length) box.append(el("div", { className: "placeholder", textContent: "Không tìm thấy tin nhắn." }));
-      list.forEach(m => { box.append(dateDivider(m.ts), msgEl(m)); });
-      box.querySelectorAll(".bubble").forEach(b => b.classList.add("search-hit"));
-    } catch (error) { toast(error.message, true); }
-  }, 250);
-});
-
-function showMentionMenu() {
-  const input = $("text");
-  const match = input.value.slice(0, input.selectionStart).match(/(?:^|\s)@([A-Za-z0-9_]*)$/);
-  const menu = $("mentionMenu");
-  if (!match || !S.current) { menu.classList.add("hidden"); return; }
-  const prefix = match[1].toLowerCase();
-  const members = S.current.members.filter(u => u.id !== S.me.id);
-  const choices = members.filter(u => (u.username || "").toLowerCase().startsWith(prefix)).slice(0, 6);
-  menu.replaceChildren();
-  if (!choices.length) { menu.classList.add("hidden"); return; }
-  choices.forEach(user => {
-    const btn = el("button", { type: "button", textContent: `@${user.username}` });
-    btn.onclick = () => {
-      const start = input.selectionStart;
-      const before = input.value.slice(0, start).replace(/@([A-Za-z0-9_]*)$/, `@${user.username} `);
-      input.value = before + input.value.slice(start);
-      input.focus();
-      menu.classList.add("hidden");
-    };
-    menu.append(btn);
-  });
-  menu.classList.remove("hidden");
-}
-$("text").addEventListener("input", showMentionMenu);
-
-async function enableNotifications() {
-  if (!("Notification" in window)) return toast("Trình duyệt không hỗ trợ thông báo", true);
-  const permission = await Notification.requestPermission();
-  if (permission !== "granted") return toast("Bạn đã từ chối thông báo", true);
-  try {
-    if (!("serviceWorker" in navigator)) throw new Error("Không hỗ trợ Service Worker");
-    const registration = await navigator.serviceWorker.register("/sw.js");
-    const { publicKey } = await api("/api/push/vapid-public-key");
-    if (!publicKey) throw new Error("Máy chủ chưa cấu hình khóa thông báo");
-    const key = Uint8Array.from(atob(publicKey.replace(/-/g, "+").replace(/_/g, "/")), c => c.charCodeAt(0));
-    let subscription = await registration.pushManager.getSubscription();
-    if (!subscription) subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
-    await api("/api/push/subscription", "POST", subscription.toJSON());
-    toast("Đã bật thông báo tin nhắn");
-  } catch (error) {
-    toast(error.message || "Không thể đăng ký thông báo đẩy", true);
-  }
-}
-$("notifyBtn").onclick = enableNotifications;
-
-function showMessageNotification(event) {
-  if (event.sender.id === S.me.id || !("Notification" in window) || Notification.permission !== "granted") return;
-  if (document.hidden || !S.current || S.current.id !== event.room_id) {
-    const mentioned = (event.mentions || []).includes(S.me.id);
-    const title = mentioned ? `Bạn được nhắc tên trong ${S.rooms.find(r => r.id === event.room_id)?.name || "RealChat"}` : "Tin nhắn mới - RealChat";
-    new Notification(title, { body: `${event.sender.username}: ${event.content}`, tag: event.room_id });
-  }
 }

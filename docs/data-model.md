@@ -9,6 +9,10 @@ Database: `chatapp` (đổi bằng biến môi trường `DB_NAME`). Collection:
 | `_id` | ObjectId | |
 | `username` | string | Duy nhất (unique index), 3-20 ký tự: chữ, số, `_` |
 | `password_hash` | string | bcrypt, không bao giờ lưu mật khẩu thô |
+| `display_name` | string hoặc null | Tên hiển thị tùy chọn; API dùng `username` làm tên dự phòng |
+| `about` | string | Trạng thái cá nhân hoặc mô tả hồ sơ |
+| `avatar_url` | string hoặc null | URL ảnh đại diện đã tải lên RealChat |
+| `push_subscriptions` | array | Web Push subscriptions theo chuẩn browser |
 | `created_at` | datetime (UTC) | |
 
 ## `rooms`
@@ -26,7 +30,8 @@ Một collection cho cả chat riêng và nhóm, phân biệt bằng `type`.
 
 // Chat 1-1
 { "_id": ObjectId, "type": "dm", "dm_key": "66e0...:66e1...", "members": [ObjectId, ObjectId],
-  "created_by": ObjectId, "created_at": ISODate }
+  "created_by": ObjectId, "created_at": ISODate,
+  "read_by": { "<user_id>": ISODate } }
 ```
 
 `dm_key` là hai `user_id` sắp xếp theo thứ tự chữ cái, nối bằng `:`. Kết hợp **unique index (partial)** và `find_one_and_update(upsert=True)` (atomic) nên mỗi cặp người chỉ có đúng một phòng DM, kể cả khi hai người bấm "nhắn tin" cùng lúc.
@@ -37,9 +42,16 @@ Quy tắc nhóm: chỉ `created_by` thêm/xóa thành viên; ai cũng rời đư
 
 ```jsonc
 { "_id": ObjectId, "room_id": ObjectId, "sender_id": ObjectId, "sender_name": "an",
-  "type": "text",            // "text" | "image"
+  "type": "text",            // "text" | "image" | "video" | "audio"
   "content": "Xin chào",     // text: nội dung; image: URL ảnh
-  "created_at": ISODate }
+  "mentions": [ObjectId, ...],
+  "reactions": { "❤️": [ObjectId, ...] },
+  "read_by": [ObjectId, ...],
+  "pinned_by": [ObjectId, ...],
+  "edited_at": ISODate | null,
+  "deleted_at": ISODate | null,
+  "created_at": ISODate,
+  "duration": null           // số giây đối với video/audio }
 ```
 
 `sender_name` lưu lặp (denormalize) để đọc lịch sử chỉ cần một truy vấn, không phải join sang `users`.

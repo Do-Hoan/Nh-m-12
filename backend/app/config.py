@@ -29,6 +29,8 @@ CLOUDINARY_API_KEY = os.getenv("CLOUDINARY_API_KEY", "")
 CLOUDINARY_API_SECRET = os.getenv("CLOUDINARY_API_SECRET", "")
 USE_CLOUDINARY = bool(CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET)
 MAX_IMAGE_BYTES = 5 * 1024 * 1024  # 5MB
+MAX_MEDIA_BYTES = 5 * 1024 * 1024  # 5MB cho video và audio
+MAX_AUDIO_SECONDS = int(os.getenv("MAX_AUDIO_SECONDS", "120"))
 
 # --- WebRTC: STUN công cộng + TURN (tùy chọn nhưng cần để gọi khác mạng) ---
 STUN_URLS = _list("STUN_URLS", "stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302")

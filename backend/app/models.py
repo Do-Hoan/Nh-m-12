@@ -39,6 +39,7 @@ def message_out(m: dict) -> dict:
         "read_by": [str(uid) for uid in (m.get("read_by") or [])],
         "pinned_by": [str(uid) for uid in (m.get("pinned_by") or [])],
         "mentions": [str(uid) for uid in (m.get("mentions") or [])],
+        "duration": m.get("duration"),
     }
 
 

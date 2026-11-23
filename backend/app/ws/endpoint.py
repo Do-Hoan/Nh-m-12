@@ -8,12 +8,12 @@ import logging
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
-from ..config import MAX_MESSAGE_LEN, VAPID_PRIVATE_KEY, VAPID_PUBLIC_KEY, VAPID_SUBJECT, WS_IDLE_TIMEOUT
+from ..config import MAX_AUDIO_SECONDS, MAX_MESSAGE_LEN, VAPID_PRIVATE_KEY, VAPID_PUBLIC_KEY, VAPID_SUBJECT, WS_IDLE_TIMEOUT
 from ..db import db, now
 from ..deps import user_from_token
 from ..models import message_out, user_out
 from ..security import to_oid
-from ..services.storage import is_allowed_image_url
+from ..services.storage import is_allowed_image_url, is_allowed_media_url
 from .calls import calls
 from .manager import manager
 
@@ -51,12 +51,16 @@ async def find_room_of(user: dict, room_id) -> dict | None:
 async def on_message_send(user: dict, ws: WebSocket, data: dict) -> None:
     msg_type = data.get("msg_type", "text")
     content = str(data.get("content", "")).strip()
-    if msg_type not in ("text", "image"):
-        return await send_error(ws, "INVALID_CONTENT", "msg_type phải là 'text' hoặc 'image'")
-    if not content or len(content) > MAX_MESSAGE_LEN:
+    if msg_type not in ("text", "image", "video", "audio"):
+        return await send_error(ws, "INVALID_CONTENT", "msg_type phải là 'text', 'image', 'video' hoặc 'audio'")
+    if not content:
+        return await send_error(ws, "INVALID_CONTENT", "Nội dung không được để trống")
+    if msg_type == "text" and len(content) > MAX_MESSAGE_LEN:
         return await send_error(ws, "INVALID_CONTENT", f"Nội dung phải từ 1 đến {MAX_MESSAGE_LEN} ký tự")
     if msg_type == "image" and not is_allowed_image_url(content):
         return await send_error(ws, "INVALID_CONTENT", "URL ảnh không hợp lệ")
+    if msg_type in ("video", "audio") and not is_allowed_media_url(content):
+        return await send_error(ws, "INVALID_CONTENT", "URL video hoặc audio không hợp lệ")
 
     room = await find_room_of(user, data.get("room_id"))
     if not room:
@@ -71,6 +75,17 @@ async def on_message_send(user: dict, ws: WebSocket, data: dict) -> None:
         "created_at": now(),
         "read_by": [user["_id"]],
     }
+    duration = data.get("duration")
+    if msg_type in ("video", "audio"):
+        try:
+            duration = max(0, int(duration)) if duration is not None else None
+        except (TypeError, ValueError):
+            duration = None
+        if msg_type == "audio" and duration is not None and duration > MAX_AUDIO_SECONDS:
+            return await send_error(ws, "INVALID_CONTENT", f"Ghi âm không được vượt quá {MAX_AUDIO_SECONDS} giây")
+        if duration is not None:
+            msg["duration"] = duration
+
     if msg_type == "text":
         members = await db.users.find(
             {"_id": {"$in": room["members"]}},
@@ -303,6 +318,8 @@ async def handle_event(user: dict, ws: WebSocket, raw: str) -> None:
         await on_message_send(user, ws, data)
     elif event_type == "message.reaction":
         await on_message_reaction(user, ws, data)
+    elif event_type == "message.pin":
+        await on_message_pin(user, ws, data)
     elif event_type == "call.invite":
         await on_call_invite(user, ws, data)
     elif event_type == "call.accept":

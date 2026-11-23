@@ -1876,3 +1876,59 @@ body.dark .message-avatar {
     transition-duration: .01ms !important;
   }
 }
+
+/* ===== VIDEO / AUDIO MEDIA ===== */
+
+.bubble.media {
+  width: min(340px, 72vw);
+  max-width: 100%;
+  padding: 6px;
+  overflow: hidden;
+}
+
+.bubble.media video,
+.bubble.media audio {
+  display: block;
+  width: 100%;
+  max-height: 280px;
+  border-radius: 10px;
+}
+
+.bubble.media.audio { min-width: 260px; }
+
+.media-duration {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: right;
+}
+
+.record-panel {
+  position: absolute;
+  left: 120px;
+  right: 24px;
+  bottom: calc(100% - 8px);
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 58px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.record-panel audio { flex: 1; min-width: 120px; height: 42px; }
+.record-status { flex: 1; color: var(--text); font-size: 13px; font-weight: 700; }
+.record-panel button { min-width: 64px !important; height: 40px !important; padding: 8px 10px; }
+.record-panel button:first-of-type { background: transparent; color: var(--danger); border-color: var(--danger); }
+.record-panel .record-send { background: var(--accent); color: #fff; }
+
+@media (max-width: 720px) {
+  .bubble.media { width: min(270px, 68vw); }
+  .bubble.media.audio { min-width: 210px; }
+  .record-panel { left: 8px; right: 8px; }
+}
