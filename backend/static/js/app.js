@@ -1,4 +1,3 @@
-
 /* =========================================================
    REALCHAT - MAIN APPLICATION
    Authentication, WebSocket, Sidebar, Chat, Messages
@@ -860,7 +859,7 @@ function msgEl(message) {
     bubble.append(el("audio", { src: message.content, controls: true, preload: "metadata" }));
   } else {
     bubble.className = "bubble";
-    bubble.textContent = message.content;
+    bubble.append(...renderMentionParts(message.content));
   }
 
   // Thời gian
@@ -956,6 +955,19 @@ function actionsEl(message, mine) {
     };
     bar.append(del);
   }
+
+  const pinned = (message.pinned_by || []).includes(S.me.id);
+  const pin = el("button", {
+    type: "button",
+    title: pinned ? "Bỏ ghim" : "Ghim tin nhắn",
+    textContent: pinned ? "📌" : "📍",
+  });
+  pin.onclick = () => wsSend({
+    type: "message.pin",
+    room_id: message.room_id,
+    message_id: message.id,
+  });
+  bar.append(pin);
 
   return bar;
 }
@@ -1145,6 +1157,8 @@ function addMessage(message) {
 /* ======================== NEW MESSAGES ======================== */
 
 async function onNewMessage(event) {
+  showMessageNotification(event);
+
   if (!S.rooms.some(room => room.id === event.room_id)) {
     await refreshSidebar();
   }
@@ -1235,6 +1249,7 @@ async function openRoom(room, keepScroll = false) {
     renderTyping();
     applySeen();
     markCurrentRead();
+    renderPinnedBar();
     if (
       !keepScroll &&
       window.innerWidth > 720
@@ -1953,64 +1968,97 @@ $("manageBtn").onclick = () => {
   openModal(...nodes, actions);
 };
 
-/* ======================== VISIBILITY ======================== */
+/* ======================== SEARCH / PIN / MENTION / NOTIFICATION ======================== */
 
-document.addEventListener("visibilitychange", () => {
-  if (!document.hidden && S.current) {
-    S.unread[S.current.id] = 0;
-    saveUnread();
-    renderSidebar();
-  }
-});
-
-/* ======================== DARK MODE ======================== */
-
-const themeToggle = $("themeToggle");
-
-if (themeToggle) {
-  const savedTheme = localStorage.getItem("realchat-theme");
-
-  if (savedTheme === "dark") {
-    document.body.classList.add("dark");
-  }
-
-  function updateThemeButton() {
-    const isDark =
-      document.body.classList.contains("dark");
-
-    themeToggle.textContent = isDark ? "☀" : "☾";
-    themeToggle.title = isDark
-      ? "Chuyển sang giao diện sáng"
-      : "Chuyển sang giao diện tối";
-    themeToggle.setAttribute("aria-label", themeToggle.title);
-  }
-
-  updateThemeButton();
-
-  themeToggle.onclick = () => {
-    document.body.classList.toggle("dark");
-
-    const isDark =
-      document.body.classList.contains("dark");
-
-    localStorage.setItem(
-      "realchat-theme",
-      isDark ? "dark" : "light"
-    );
-
-    updateThemeButton();
+function renderPinnedBar() {
+  if (!S.current) return;
+  const pinned = Object.values(S.msgs).filter(m => m.room_id === S.current.id && (m.pinned_by || []).length);
+  const bar = $("pinnedBar");
+  if (!pinned.length) { bar.classList.add("hidden"); bar.replaceChildren(); return; }
+  bar.classList.remove("hidden");
+  const m = pinned[pinned.length - 1];
+  bar.replaceChildren(el("span", { textContent: "📌 " + (m.content || "Tin nhắn") }));
+  bar.onclick = () => {
+    const node = $(`msgs`).querySelector(`.msg[data-id="${m.id}"]`);
+    if (node) { node.scrollIntoView({ behavior: "smooth", block: "center" }); node.classList.add("search-hit"); setTimeout(() => node.classList.remove("search-hit"), 1800); }
   };
 }
 
-/* ======================== START APPLICATION ======================== */
+$("searchBtn").onclick = () => {
+  $("messageSearch").classList.toggle("hidden");
+  if (!$("messageSearch").classList.contains("hidden")) $("messageSearchInput").focus();
+};
+$("closeSearchBtn").onclick = () => {
+  $("messageSearch").classList.add("hidden");
+  $("messageSearchInput").value = "";
+  if (S.current) openRoom(S.current);
+};
+let searchTimer = null;
+$("messageSearchInput").addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  const q = $("messageSearchInput").value.trim();
+  if (!q || !S.current) return;
+  searchTimer = setTimeout(async () => {
+    try {
+      const list = await api(`/api/rooms/${S.current.id}/messages/search?q=${encodeURIComponent(q)}&limit=100`);
+      const box = $("msgs"); box.replaceChildren();
+      if (!list.length) box.append(el("div", { className: "placeholder", textContent: "Không tìm thấy tin nhắn." }));
+      list.forEach(m => { box.append(dateDivider(m.ts), msgEl(m)); });
+      box.querySelectorAll(".bubble").forEach(b => b.classList.add("search-hit"));
+    } catch (error) { toast(error.message, true); }
+  }, 250);
+});
 
-if (S.token) {
-  api("/api/auth/me")
-    .then(user => {
-      S.me = user;
-      start();
-    })
-    .catch(() => {
-      // Token không hợp lệ: quay về màn hình đăng nhập
-    });
+function showMentionMenu() {
+  const input = $("text");
+  const match = input.value.slice(0, input.selectionStart).match(/(?:^|\s)@([A-Za-z0-9_]*)$/);
+  const menu = $("mentionMenu");
+  if (!match || !S.current) { menu.classList.add("hidden"); return; }
+  const prefix = match[1].toLowerCase();
+  const members = S.current.members.filter(u => u.id !== S.me.id);
+  const choices = members.filter(u => (u.username || "").toLowerCase().startsWith(prefix)).slice(0, 6);
+  menu.replaceChildren();
+  if (!choices.length) { menu.classList.add("hidden"); return; }
+  choices.forEach(user => {
+    const btn = el("button", { type: "button", textContent: `@${user.username}` });
+    btn.onclick = () => {
+      const start = input.selectionStart;
+      const before = input.value.slice(0, start).replace(/@([A-Za-z0-9_]*)$/, `@${user.username} `);
+      input.value = before + input.value.slice(start);
+      input.focus();
+      menu.classList.add("hidden");
+    };
+    menu.append(btn);
+  });
+  menu.classList.remove("hidden");
+}
+$("text").addEventListener("input", showMentionMenu);
+
+async function enableNotifications() {
+  if (!("Notification" in window)) return toast("Trình duyệt không hỗ trợ thông báo", true);
+  const permission = await Notification.requestPermission();
+  if (permission !== "granted") return toast("Bạn đã từ chối thông báo", true);
+  try {
+    if (!("serviceWorker" in navigator)) throw new Error("Không hỗ trợ Service Worker");
+    const registration = await navigator.serviceWorker.register("/sw.js");
+    const { publicKey } = await api("/api/push/vapid-public-key");
+    if (!publicKey) throw new Error("Máy chủ chưa cấu hình khóa thông báo");
+    const key = Uint8Array.from(atob(publicKey.replace(/-/g, "+").replace(/_/g, "/")), c => c.charCodeAt(0));
+    let subscription = await registration.pushManager.getSubscription();
+    if (!subscription) subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+    await api("/api/push/subscription", "POST", subscription.toJSON());
+    toast("Đã bật thông báo tin nhắn");
+  } catch (error) {
+    toast(error.message || "Không thể đăng ký thông báo đẩy", true);
+  }
+}
+$("notifyBtn").onclick = enableNotifications;
+
+function showMessageNotification(event) {
+  if (event.sender.id === S.me.id || !("Notification" in window) || Notification.permission !== "granted") return;
+  if (document.hidden || !S.current || S.current.id !== event.room_id) {
+    const mentioned = (event.mentions || []).includes(S.me.id);
+    const title = mentioned ? `Bạn được nhắc tên trong ${S.rooms.find(r => r.id === event.room_id)?.name || "RealChat"}` : "Tin nhắn mới - RealChat";
+    new Notification(title, { body: `${event.sender.username}: ${event.content}`, tag: event.room_id });
+  }
 }

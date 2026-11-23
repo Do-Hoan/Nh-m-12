@@ -8,7 +8,7 @@ import logging
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
-from ..config import MAX_MESSAGE_LEN, WS_IDLE_TIMEOUT
+from ..config import MAX_MESSAGE_LEN, VAPID_PRIVATE_KEY, VAPID_PUBLIC_KEY, VAPID_SUBJECT, WS_IDLE_TIMEOUT
 from ..db import db, now
 from ..deps import user_from_token
 from ..models import message_out, user_out
@@ -80,6 +80,7 @@ async def on_message_send(user: dict, ws: WebSocket, data: dict) -> None:
     if client_id:
         msg["client_id"] = client_id
     await db.messages.insert_one(msg)
+    asyncio.create_task(send_web_push(room, user, content, msg.get("mentions", [])))
     manager.set_room_members(str(room["_id"]), room["members"])
     payload = {"type": "message.new", **message_out(msg), "client_id": client_id or None}
     await manager.send_to_room(str(room["_id"]), payload)
@@ -331,12 +332,67 @@ async def on_message_reaction(user: dict, ws: WebSocket, data: dict) -> None:
     await manager.send_to_room(str(room["_id"]), payload)
 
 
+async def on_message_pin(user: dict, ws: WebSocket, data: dict) -> None:
+    room = await find_room_of(user, data.get("room_id"))
+    if not room:
+        return await send_error(ws, "FORBIDDEN", "Bạn không ở trong phòng này")
+
+    msg = await db.messages.find_one({"_id": to_oid(data.get("message_id")), "room_id": room["_id"]})
+    if not msg:
+        return await send_error(ws, "NOT_FOUND", "Tin nhắn không tồn tại")
+    if msg.get("deleted_at"):
+        return await send_error(ws, "NOT_FOUND", "Tin nhắn đã bị thu hồi")
+
+    pinned_by = list(msg.get("pinned_by") or [])
+    uid = user["_id"]
+    if uid in pinned_by:
+        pinned_by.remove(uid)
+    else:
+        pinned_by.append(uid)
+    await db.messages.update_one({"_id": msg["_id"]}, {"$set": {"pinned_by": pinned_by}})
+    updated = await db.messages.find_one({"_id": msg["_id"]})
+    payload = {"type": "message.pinned", "room_id": str(room["_id"]), **message_out(updated)}
+    await manager.send_to_room(str(room["_id"]), payload)
+
+
 # ---------- Cuộc gọi ----------
 async def on_call_invite(user: dict, ws: WebSocket, data: dict) -> None:
     room = await find_room_of(user, data.get("room_id"))
     if not room:
         return await send_error(ws, "FORBIDDEN", "Bạn không ở trong phòng này")
     await calls.invite(user, ws, room, data.get("media", "audio"))
+
+
+async def send_web_push(room: dict, sender: dict, content: str, msg_mentions: list) -> None:
+    if not VAPID_PUBLIC_KEY or not VAPID_PRIVATE_KEY:
+        return
+    try:
+        from pywebpush import webpush, WebPushException
+    except Exception:
+        return
+
+    target_ids = [uid for uid in room["members"] if uid != sender["_id"]]
+    users = await db.users.find({"_id": {"$in": target_ids}}, {"push_subscriptions": 1}).to_list(None)
+    import json
+    mentioned = set(str(uid) for uid in msg_mentions)
+    for target in users:
+        for subscription in target.get("push_subscriptions") or []:
+            is_mention = str(target["_id"]) in mentioned
+            payload = json.dumps({
+                "title": "Bạn được nhắc tên" if is_mention else f"Tin nhắn mới - {sender['username']}",
+                "body": content[:200],
+                "tag": str(room["_id"]),
+            })
+            try:
+                await asyncio.to_thread(
+                    webpush,
+                    subscription,
+                    payload,
+                    vapid_private_key=VAPID_PRIVATE_KEY,
+                    vapid_claims={"sub": VAPID_SUBJECT},
+                )
+            except WebPushException:
+                pass
 
 
 async def handle_event(user: dict, ws: WebSocket, raw: str) -> None:

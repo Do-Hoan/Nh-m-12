@@ -39,6 +39,11 @@ TURN_URL = os.getenv("TURN_URL", "")  # có thể nhiều URL, ngăn bằng dấ
 TURN_USERNAME = os.getenv("TURN_USERNAME", "")
 TURN_CREDENTIAL = os.getenv("TURN_CREDENTIAL", "")
 
+# --- VAPID cho thông báo đẩy ---
+VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "")
+VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY", "")
+VAPID_SUBJECT = os.getenv("VAPID_SUBJECT", "mailto:admin@realchat.local")
+
 # --- Chat / cuộc gọi ---
 MAX_MESSAGE_LEN = 2000
 CALL_RING_TIMEOUT = float(os.getenv("CALL_RING_TIMEOUT", "30"))  # giây chờ nghe máy

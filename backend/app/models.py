@@ -37,6 +37,8 @@ def message_out(m: dict) -> dict:
         "edited_at": iso(m.get("edited_at")),
         "reactions": reactions,
         "read_by": [str(uid) for uid in (m.get("read_by") or [])],
+        "pinned_by": [str(uid) for uid in (m.get("pinned_by") or [])],
+        "mentions": [str(uid) for uid in (m.get("mentions") or [])],
     }
 
 
