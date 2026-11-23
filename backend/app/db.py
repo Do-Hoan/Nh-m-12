@@ -25,6 +25,11 @@ async def init_db() -> None:
     # Phân trang lịch sử: lọc theo room, sắp xếp mới -> cũ
     await db.messages.create_index([("room_id", 1), ("created_at", -1)])
     await db.messages.create_index([("room_id", 1), ("_id", -1)])
+    await db.messages.create_index(
+        [("sender_id", 1), ("client_id", 1)],
+        unique=True,
+        partialFilterExpression={"client_id": {"$type": "string"}},
+    )
     await db.call_logs.create_index([("room_id", 1), ("started_at", -1)])
     # Phòng chung: ai đăng ký cũng được thêm vào (xem api/auth.py)
     await db.rooms.update_one(

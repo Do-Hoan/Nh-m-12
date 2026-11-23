@@ -1,4 +1,4 @@
-"""Lưu ảnh: Cloudinary nếu có cấu hình, ngược lại dùng MongoDB GridFS (không bao giờ ghi ổ đĩa local)."""
+"""Media storage using Cloudinary or MongoDB GridFS; never local disk."""
 import hashlib
 import time
 
@@ -6,12 +6,7 @@ import httpx
 from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorGridFSBucket
 
-from ..config import (
-    CLOUDINARY_API_KEY,
-    CLOUDINARY_API_SECRET,
-    CLOUDINARY_CLOUD_NAME,
-    USE_CLOUDINARY,
-)
+from ..config import CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET, CLOUDINARY_CLOUD_NAME, USE_CLOUDINARY
 from ..db import db
 
 FILES_PREFIX = "/api/files/"
@@ -23,8 +18,10 @@ class ImageError(Exception):
         self.status, self.detail = status, detail
 
 
+MediaError = ImageError
+
+
 def sniff_image(data: bytes) -> str | None:
-    """Nhận diện định dạng qua "magic bytes" (không tin tên file/Content-Type do client gửi)."""
     if data.startswith(b"\xff\xd8\xff"):
         return "image/jpeg"
     if data.startswith(b"\x89PNG\r\n\x1a\n"):
@@ -36,40 +33,73 @@ def sniff_image(data: bytes) -> str | None:
     return None
 
 
+def sniff_media(data: bytes, media_type: str) -> str | None:
+    if media_type == "image":
+        return sniff_image(data)
+    if media_type == "video":
+        if data.startswith(b"\x1a\x45\xdf\xa3"):
+            return "video/webm"
+        if len(data) >= 12 and data[4:8] == b"ftyp":
+            return "video/mp4"
+    if media_type == "audio":
+        if data.startswith(b"OggS"):
+            return "audio/ogg"
+        if data.startswith(b"RIFF") and data[8:12] == b"WAVE":
+            return "audio/wav"
+        if data.startswith(b"ID3") or (len(data) >= 2 and data[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2")):
+            return "audio/mpeg"
+        if data.startswith(b"\x1a\x45\xdf\xa3"):
+            return "audio/webm"
+        if len(data) >= 12 and data[4:8] == b"ftyp":
+            return "audio/mp4"
+    return None
+
+
 def is_allowed_image_url(url: str) -> bool:
-    """Chỉ cho phép tin nhắn ảnh trỏ tới nơi lưu của chính mình (tránh nhúng URL tùy ý)."""
-    if USE_CLOUDINARY:
-        return url.startswith(CLOUDINARY_PREFIX)
-    return url.startswith(FILES_PREFIX)
+    return url.startswith(CLOUDINARY_PREFIX) if USE_CLOUDINARY else url.startswith(FILES_PREFIX)
+
+
+def is_allowed_media_url(url: str, media_type: str) -> bool:
+    return is_allowed_image_url(url) if media_type == "image" else (
+        url.startswith(CLOUDINARY_PREFIX) if USE_CLOUDINARY else url.startswith(FILES_PREFIX)
+    )
 
 
 async def save_image(filename: str, data: bytes) -> str:
-    content_type = sniff_image(data)
+    return await save_media("image", filename, data)
+
+
+async def save_media(media_type: str, filename: str, data: bytes) -> str:
+    content_type = sniff_media(data, media_type)
     if not content_type:
-        raise ImageError(415, "Chỉ hỗ trợ ảnh JPG, PNG, GIF hoặc WEBP")
+        raise MediaError(415, "Định dạng tệp này chưa được hỗ trợ")
     if USE_CLOUDINARY:
-        return await _upload_cloudinary(filename, data)
-    bucket = AsyncIOMotorGridFSBucket(db)
-    file_id = await bucket.upload_from_stream(
-        filename or "image", data, metadata={"content_type": content_type}
+        return await _upload_cloudinary(media_type, filename, data)
+    file_id = await AsyncIOMotorGridFSBucket(db).upload_from_stream(
+        filename or media_type, data, metadata={"content_type": content_type, "media_type": media_type}
     )
     return f"{FILES_PREFIX}{file_id}"
 
 
-async def _upload_cloudinary(filename: str, data: bytes) -> str:
+async def _upload_cloudinary(media_type: str, filename: str, data: bytes) -> str:
     ts = str(int(time.time()))
-    # Chữ ký Cloudinary: sha1("timestamp=<ts><api_secret>")
     signature = hashlib.sha1(f"timestamp={ts}{CLOUDINARY_API_SECRET}".encode()).hexdigest()
-    url = f"https://api.cloudinary.com/v1_1/{CLOUDINARY_CLOUD_NAME}/image/upload"
-    async with httpx.AsyncClient(timeout=30) as client:
-        res = await client.post(
-            url,
-            data={"api_key": CLOUDINARY_API_KEY, "timestamp": ts, "signature": signature},
-            files={"file": (filename or "image", data)},
-        )
-    if res.status_code != 200:
-        raise ImageError(502, "Không tải ảnh lên Cloudinary được")
-    return res.json()["secure_url"]
+    resource_type = "image" if media_type == "image" else "video"
+    url = f"https://api.cloudinary.com/v1_1/{CLOUDINARY_CLOUD_NAME}/{resource_type}/upload"
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            res = await client.post(
+                url,
+                data={"api_key": CLOUDINARY_API_KEY, "timestamp": ts, "signature": signature},
+                files={"file": (filename or media_type, data)},
+            )
+        if res.status_code != 200:
+            raise MediaError(502, "Hiện chưa thể lưu tệp. Bạn hãy thử lại sau nhé.")
+        return res.json()["secure_url"]
+    except MediaError:
+        raise
+    except (httpx.HTTPError, ValueError, KeyError):
+        raise MediaError(502, "Hiện chưa thể lưu tệp. Bạn hãy thử lại sau nhé.")
 
 
 async def read_gridfs(file_id: str) -> tuple[bytes, str] | None:

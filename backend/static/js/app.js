@@ -13,7 +13,11 @@ const $ = id => document.getElementById(id);
 
 const PAGE = 30;
 const MAX_IMG = 5 * 1024 * 1024;
+const MAX_VIDEO = 25 * 1024 * 1024;
+const MAX_AUDIO = 10 * 1024 * 1024;
+const MAX_AUDIO_SECONDS = 120;
 const IMG_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+const VIDEO_TYPES = ["video/mp4", "video/webm", "video/quicktime"];
 
 const S = {
   token: localStorage.getItem("token"),
@@ -169,6 +173,7 @@ $("registerBtn").onclick = () => auth("register");
 $("logoutBtn").onclick = logout;
 
 function logout() {
+  if (typeof stopRecording === "function") stopRecording();
   if (typeof endCallLocal === "function") {
     endCallLocal();
   }
@@ -847,6 +852,12 @@ function msgEl(message) {
     };
 
     bubble.append(img);
+  } else if (message.msg_type === "video") {
+    bubble.className = "bubble media";
+    bubble.append(el("video", { src: message.content, controls: true, playsInline: true, preload: "metadata" }));
+  } else if (message.msg_type === "audio") {
+    bubble.className = "bubble media";
+    bubble.append(el("audio", { src: message.content, controls: true, preload: "metadata" }));
   } else {
     bubble.className = "bubble";
     bubble.textContent = message.content;
@@ -1100,6 +1111,7 @@ $("text").addEventListener("input", () => {
 
 function addMessage(message) {
   const box = $("msgs");
+  if (message.id && [...box.querySelectorAll(".msg")].some(node => node.dataset.id === message.id)) return;
 
   const nearBottom =
     box.scrollHeight -
@@ -1387,6 +1399,97 @@ $("imgInput").onchange = async () => {
     toast(error.message, true);
   }
 };
+
+/* ======================== SEND VIDEO / RECORD AUDIO ======================== */
+
+async function uploadMedia(file, msgType, maxBytes) {
+  if (!file || !S.current) return false;
+  if (msgType === "video" && !VIDEO_TYPES.includes(file.type)) {
+    toast("Định dạng tệp này chưa được hỗ trợ.", true); return false;
+  }
+  if (file.size > maxBytes) {
+    toast(msgType === "video" ? "Video hơi lớn, hãy chọn video nhẹ hơn nhé." : "Bản ghi âm hơi lớn, hãy thử lại nhé.", true);
+    return false;
+  }
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("msg_type", msgType);
+  toast(msgType === "video" ? "Đang tải video lên..." : "Đang tải bản ghi lên...");
+  try {
+    const res = await fetch("/api/upload", { method: "POST", headers: { Authorization: "Bearer " + S.token }, body: formData });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Hiện chưa thể lưu tệp. Bạn hãy thử lại sau nhé.");
+    return sendMessage(msgType, data.url);
+  } catch (error) {
+    toast(error.message, true);
+    return false;
+  }
+}
+
+$("videoFileBtn").onclick = () => $("videoInput").click();
+$("videoInput").onchange = async () => {
+  const file = $("videoInput").files[0];
+  $("videoInput").value = "";
+  await uploadMedia(file, "video", MAX_VIDEO);
+};
+
+let recorder = null;
+let recordingChunks = [];
+let recordingStream = null;
+let recordingStarted = 0;
+let recordingTimer = null;
+
+function stopRecordingTracks() {
+  if (recordingStream) recordingStream.getTracks().forEach(track => track.stop());
+  recordingStream = null;
+  clearInterval(recordingTimer);
+  recordingTimer = null;
+}
+
+function setRecordingStatus(text, visible = true) {
+  const status = $("recordingStatus");
+  status.textContent = text;
+  status.classList.toggle("hidden", !visible);
+}
+
+async function startRecording() {
+  if (!S.current || recorder) return;
+  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+    toast("Trình duyệt này chưa hỗ trợ ghi âm.", true); return;
+  }
+  try {
+    recordingStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mime = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus", "audio/mp4"]
+      .find(type => MediaRecorder.isTypeSupported(type)) || "";
+    recorder = new MediaRecorder(recordingStream, mime ? { mimeType: mime } : undefined);
+    recordingChunks = [];
+    recordingStarted = Date.now();
+    recorder.ondataavailable = event => { if (event.data.size) recordingChunks.push(event.data); };
+    recorder.onstop = async () => {
+      const active = recorder;
+      const blob = new Blob(recordingChunks, { type: active.mimeType || "audio/webm" });
+      recorder = null;
+      stopRecordingTracks();
+      setRecordingStatus("", false);
+      if (blob.size) await uploadMedia(new File([blob], "recording", { type: blob.type }), "audio", MAX_AUDIO);
+      recordingChunks = [];
+    };
+    recorder.start(250);
+    setRecordingStatus("Đang ghi 0:00 · nhấn micro để gửi", true);
+    recordingTimer = setInterval(() => {
+      const seconds = Math.floor((Date.now() - recordingStarted) / 1000);
+      setRecordingStatus(`Đang ghi ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")} · nhấn micro để gửi`);
+      if (seconds >= MAX_AUDIO_SECONDS) stopRecording();
+    }, 1000);
+  } catch (_) {
+    stopRecordingTracks(); recorder = null;
+    toast("Bạn cần cho phép sử dụng micro để ghi âm.", true);
+  }
+}
+
+function stopRecording() { if (recorder) recorder.stop(); }
+$("audioBtn").onclick = () => recorder ? stopRecording() : startRecording();
+window.addEventListener("beforeunload", stopRecording);
 
 /* ======================== MODAL ======================== */
 

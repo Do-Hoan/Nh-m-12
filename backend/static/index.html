@@ -67,7 +67,11 @@
     <div id="msgs"><div class="placeholder">Chọn một nhóm hoặc một người ở cột bên trái để bắt đầu trò chuyện.</div></div>
     <form id="composer" class="hidden">
       <input type="file" id="imgInput" accept="image/jpeg,image/png,image/gif,image/webp" class="hidden">
+      <input type="file" id="videoInput" accept="video/mp4,video/webm,video/quicktime" class="hidden">
       <button type="button" class="icon" id="imgBtn" title="Gửi ảnh" aria-label="Gửi ảnh">&#128206;</button>
+      <button type="button" class="icon" id="videoFileBtn" title="Gửi video" aria-label="Gửi video">&#127909;</button>
+      <button type="button" class="icon" id="audioBtn" title="Ghi âm" aria-label="Ghi âm">&#127908;</button>
+      <span id="recordingStatus" class="recording-status hidden" aria-live="polite"></span>
       <input id="text" placeholder="Nhập tin nhắn..." autocomplete="off" maxlength="2000">
       <button type="submit">Gửi</button>
     </form>

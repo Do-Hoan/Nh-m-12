@@ -13,7 +13,7 @@ from ..db import db, now
 from ..deps import user_from_token
 from ..models import message_out, user_out
 from ..security import to_oid
-from ..services.storage import is_allowed_image_url
+from ..services.storage import is_allowed_media_url
 from .calls import calls
 from .manager import manager
 
@@ -51,16 +51,22 @@ async def find_room_of(user: dict, room_id) -> dict | None:
 async def on_message_send(user: dict, ws: WebSocket, data: dict) -> None:
     msg_type = data.get("msg_type", "text")
     content = str(data.get("content", "")).strip()
-    if msg_type not in ("text", "image"):
-        return await send_error(ws, "INVALID_CONTENT", "msg_type phải là 'text' hoặc 'image'")
-    if not content or len(content) > MAX_MESSAGE_LEN:
+    if msg_type not in ("text", "image", "video", "audio"):
+        return await send_error(ws, "INVALID_CONTENT", "Loại tin nhắn không hợp lệ")
+    if not content or (msg_type == "text" and len(content) > MAX_MESSAGE_LEN):
         return await send_error(ws, "INVALID_CONTENT", f"Nội dung phải từ 1 đến {MAX_MESSAGE_LEN} ký tự")
-    if msg_type == "image" and not is_allowed_image_url(content):
-        return await send_error(ws, "INVALID_CONTENT", "URL ảnh không hợp lệ")
+    if msg_type != "text" and not is_allowed_media_url(content, msg_type):
+        return await send_error(ws, "INVALID_CONTENT", "URL media không hợp lệ")
 
     room = await find_room_of(user, data.get("room_id"))
     if not room:
         return await send_error(ws, "FORBIDDEN", "Bạn không ở trong phòng này")
+
+    client_id = str(data.get("client_id", "")).strip()
+    if client_id:
+        existing = await db.messages.find_one({"sender_id": user["_id"], "client_id": client_id, "room_id": room["_id"]})
+        if existing:
+            return await manager.send_to_room(str(room["_id"]), {"type": "message.new", **message_out(existing), "client_id": client_id})
 
     msg = {
         "room_id": room["_id"],
@@ -71,9 +77,134 @@ async def on_message_send(user: dict, ws: WebSocket, data: dict) -> None:
         "created_at": now(),
         "read_by": [user["_id"]],
     }
+    if client_id:
+        msg["client_id"] = client_id
     await db.messages.insert_one(msg)
     manager.set_room_members(str(room["_id"]), room["members"])
-    payload = {"type": "message.new", **message_out(msg), "client_id": data.get("client_id")}
+    payload = {"type": "message.new", **message_out(msg), "client_id": client_id or None}
+    await manager.send_to_room(str(room["_id"]), payload)
+
+
+async def on_typing(user: dict, ws: WebSocket, data: dict) -> None:
+    room = await find_room_of(user, data.get("room_id"))
+    if not room:
+        return await send_error(ws, "FORBIDDEN", "Bạn không ở trong phòng này")
+
+    event_type = data.get("type")
+    payload = {
+        "type": event_type,
+        "room_id": str(room["_id"]),
+        "user_id": str(user["_id"]),
+        "username": user["username"],
+    }
+    await manager.send_to_room(str(room["_id"]), payload)
+
+
+async def on_message_read(user: dict, ws: WebSocket, data: dict) -> None:
+    room = await find_room_of(user, data.get("room_id"))
+    if not room:
+        return await send_error(ws, "FORBIDDEN", "Bạn không ở trong phòng này")
+
+    message_id = data.get("message_id")
+    if message_id:
+        msg = await db.messages.find_one({"_id": to_oid(message_id), "room_id": room["_id"]})
+        if not msg:
+            return await send_error(ws, "NOT_FOUND", "Tin nhắn không tồn tại")
+    else:
+        msg = None
+
+    now_ts = now()
+    await db.rooms.update_one({"_id": room["_id"]}, {"$set": {f"read_by.{str(user['_id'])}": now_ts}}, upsert=True)
+    if msg:
+        await db.messages.update_one({"_id": msg["_id"]}, {"$addToSet": {"read_by": user["_id"]}})
+
+    payload = {"type": "message.read", "room_id": str(room["_id"]), "user_id": str(user["_id"]), "read_at": now_ts.isoformat()}
+    if msg:
+        payload["message_id"] = str(msg["_id"])
+    await manager.send_to_room(str(room["_id"]), payload)
+
+
+async def on_message_edit(user: dict, ws: WebSocket, data: dict) -> None:
+    room = await find_room_of(user, data.get("room_id"))
+    if not room:
+        return await send_error(ws, "FORBIDDEN", "Bạn không ở trong phòng này")
+
+    msg = await db.messages.find_one({"_id": to_oid(data.get("message_id")), "room_id": room["_id"]})
+    if not msg:
+        return await send_error(ws, "NOT_FOUND", "Tin nhắn không tồn tại")
+    if str(msg["sender_id"]) != str(user["_id"]):
+        return await send_error(ws, "FORBIDDEN", "Bạn không có quyền chỉnh sửa tin nhắn này")
+
+    if msg.get("deleted_at"):
+        return await send_error(ws, "NOT_FOUND", "Tin nhắn đã bị thu hồi")
+    if msg.get("type", "text") != "text":
+        return await send_error(ws, "INVALID_CONTENT", "Chỉ có thể chỉnh sửa tin nhắn văn bản")
+
+    content = str(data.get("content", "")).strip()
+    if not content or len(content) > MAX_MESSAGE_LEN:
+        return await send_error(ws, "INVALID_CONTENT", f"Nội dung phải từ 1 đến {MAX_MESSAGE_LEN} ký tự")
+
+    updated_at = now()
+    result = await db.messages.find_one_and_update(
+        {"_id": msg["_id"]},
+        {"$set": {"content": content, "edited_at": updated_at}},
+        return_document=True,
+    )
+    payload = {"type": "message.edited", "id": str(result["_id"]), "room_id": str(room["_id"]), "content": content, "edited_at": updated_at.isoformat()}
+    await manager.send_to_room(str(room["_id"]), payload)
+
+
+async def on_message_delete(user: dict, ws: WebSocket, data: dict) -> None:
+    room = await find_room_of(user, data.get("room_id"))
+    if not room:
+        return await send_error(ws, "FORBIDDEN", "Bạn không ở trong phòng này")
+
+    msg = await db.messages.find_one({"_id": to_oid(data.get("message_id")), "room_id": room["_id"]})
+    if not msg:
+        return await send_error(ws, "NOT_FOUND", "Tin nhắn không tồn tại")
+    if str(msg["sender_id"]) != str(user["_id"]):
+        return await send_error(ws, "FORBIDDEN", "Bạn không có quyền thu hồi tin nhắn này")
+
+    deleted_at = now()
+    await db.messages.update_one({"_id": msg["_id"]}, {"$set": {"deleted_at": deleted_at, "content": "[tin nhắn đã thu hồi]"}})
+    updated = await db.messages.find_one({"_id": msg["_id"]})
+    payload = {"type": "message.deleted", "message_id": str(msg["_id"]), "room_id": str(room["_id"]), **message_out(updated)}
+    await manager.send_to_room(str(room["_id"]), payload)
+
+
+async def on_message_reaction(user: dict, ws: WebSocket, data: dict) -> None:
+    room = await find_room_of(user, data.get("room_id"))
+    if not room:
+        return await send_error(ws, "FORBIDDEN", "Bạn không ở trong phòng này")
+
+    emoji = str(data.get("emoji", "")).strip()
+    if emoji not in ALLOWED_REACTIONS:
+        return await send_error(ws, "INVALID_CONTENT", "Emoji không hợp lệ")
+
+    msg = await db.messages.find_one({"_id": to_oid(data.get("message_id")), "room_id": room["_id"]})
+    if not msg:
+        return await send_error(ws, "NOT_FOUND", "Tin nhắn không tồn tại")
+
+    if msg.get("deleted_at"):
+        return await send_error(ws, "NOT_FOUND", "Tin nhắn đã bị thu hồi")
+
+    reactions = dict(msg.get("reactions") or {})
+    users = list(reactions.get(emoji, []))
+    uid = user["_id"]
+
+    if uid in users:
+        users.remove(uid)
+        if not users:
+            reactions.pop(emoji, None)
+        else:
+            reactions[emoji] = users
+    else:
+        users.append(uid)
+        reactions[emoji] = users
+
+    await db.messages.update_one({"_id": msg["_id"]}, {"$set": {"reactions": reactions}})
+    updated = await db.messages.find_one({"_id": msg["_id"]})
+    payload = {"type": "message.reaction", "message_id": str(msg["_id"]), "room_id": str(room["_id"]), "emoji": emoji, **message_out(updated)}
     await manager.send_to_room(str(room["_id"]), payload)
 
 

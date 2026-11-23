@@ -1532,6 +1532,18 @@ header #joinCallBtn {
   transform: translateX(-50%);
 }
 
+.bubble.media video,
+.bubble.media audio {
+  display: block;
+  max-width: min(72vw, 420px);
+}
+
+.recording-status {
+  color: #c0392b;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
 .toast {
   padding: 11px 15px;
   border-radius: 12px;
