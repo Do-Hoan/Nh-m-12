@@ -14,8 +14,8 @@
   <form id="authForm">
     <h1>RealChat</h1>
     <p class="sub">Chat, gọi thoại và video thời gian thực</p>
-    <input id="username" placeholder="Tên đăng nhập (3-20 ký tự: chữ, số, _)" autocomplete="username" required>
-    <input id="password" type="password" placeholder="Mật khẩu (tối thiểu 6 ký tự)" autocomplete="current-password" required>
+    <input id="username" placeholder="Tên đăng nhập (3-20 ký tự: chữ, số, _)" autocomplete="username" minlength="3" maxlength="20" pattern="[A-Za-z0-9_]+" title="Chỉ dùng chữ không dấu, số và dấu gạch dưới" required>
+    <input id="password" type="password" placeholder="Mật khẩu (6-72 ký tự)" autocomplete="current-password" minlength="6" maxlength="72" required>
     <div id="err" role="alert"></div>
     <button type="submit">Đăng nhập</button>
     <button type="button" class="ghost" id="registerBtn">Tạo tài khoản mới</button>

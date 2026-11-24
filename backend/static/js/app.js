@@ -129,6 +129,33 @@ async function api(path, method = "GET", body) {
 
     const detail = data.detail;
 
+    if (Array.isArray(detail)) {
+      const messages = detail.map(error => {
+        const field = error.loc?.at(-1);
+        const label = field === "username"
+          ? "Tên đăng nhập"
+          : field === "password"
+            ? "Mật khẩu"
+            : "Dữ liệu";
+
+        if (error.type === "string_too_short") {
+          return `${label} phải có ít nhất ${error.ctx.min_length} ký tự`;
+        }
+        if (error.type === "string_too_long") {
+          return `${label} không được quá ${error.ctx.max_length} ký tự`;
+        }
+        if (error.type === "string_pattern_mismatch" && field === "username") {
+          return "Tên đăng nhập chỉ được gồm chữ không dấu, số và dấu gạch dưới";
+        }
+        if (error.type === "missing") {
+          return `Thiếu ${label.toLowerCase()}`;
+        }
+        return `${label} không hợp lệ`;
+      });
+
+      throw new Error([...new Set(messages)].join(". "));
+    }
+
     throw new Error(
       typeof detail === "string"
         ? detail
