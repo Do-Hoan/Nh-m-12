@@ -34,7 +34,7 @@ const S = {
   msgs: {},
 };
 
-const SIDEBAR_STORAGE_KEY = "realchat-sidebar-collapsed";
+const SIDEBAR_STORAGE_KEY = "realchat-sidebar";
 
 if (localStorage.getItem(SIDEBAR_STORAGE_KEY) === "true") {
   $("app").classList.add("sidebar-collapsed");
@@ -432,6 +432,14 @@ async function onEvent(event) {
       }
 
       renderSidebar();
+      break;
+
+    case "message.pinned":
+      updateMessage({
+        id: event.id,
+        pinned_by: event.pinned_by,
+      });
+      renderPinnedBar();
       break;
 
     case "error":
@@ -858,13 +866,43 @@ function msgEl(message) {
     bubble.append(img);
   } else if (message.msg_type === "video") {
     bubble.className = "bubble media";
-    const video = el("video", { src: message.content, controls: "", preload: "metadata", playsinline: "" });
+    const video = el("video", { src: message.content, controls: true, preload: "metadata", playsinline: true });
     bubble.append(video);
     if (message.duration) bubble.append(el("span", { className: "media-duration", textContent: `Thời lượng ${formatDuration(message.duration)}` }));
   } else if (message.msg_type === "audio") {
     bubble.className = "bubble media audio";
-    bubble.append(el("audio", { src: message.content, controls: "", preload: "metadata" }));
-    bubble.append(el("span", { className: "media-duration", textContent: `Ghi âm · ${formatDuration(message.duration)}` }));
+    const audioUrl = message.content;
+    const audio = el("audio", { controls: true, preload: "metadata" });
+    const play = el("button", {
+      type: "button",
+      className: "audio-play",
+      textContent: "▶ Nghe ghi âm",
+    });
+
+    play.onclick = async () => {
+      play.disabled = true;
+      play.textContent = "Đang tải...";
+      try {
+        const response = await fetch(audioUrl, {
+          headers: S.token ? { Authorization: `Bearer ${S.token}` } : {},
+        });
+        if (!response.ok) throw new Error("Không tải được tin ghi âm");
+        const blob = await response.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        audio.src = objectUrl;
+        audio.load();
+        await audio.play();
+        play.textContent = "⏸ Nghe lại";
+      } catch (error) {
+        play.textContent = "▶ Thử nghe lại";
+        toast(error.message || "Không phát được ghi âm", true);
+      } finally {
+        play.disabled = false;
+      }
+    };
+
+    audio.onerror = () => toast("Không phát được định dạng ghi âm này", true);
+    bubble.append(play, audio);
   } else {
     bubble.className = "bubble";
     bubble.append(...renderMentionParts(message.content));
@@ -1494,7 +1532,7 @@ function showRecorderPanel(preview = false) {
   }));
 
   if (preview && recorderPreviewUrl) {
-    const audio = el("audio", { controls: "" });
+    const audio = el("audio", { controls: true, preload: "metadata" });
     audio.src = recorderPreviewUrl;
     panel.append(audio);
   }
@@ -1831,3 +1869,154 @@ function renderProfileEditor() {
     }
   };
 }
+
+function renderMentionParts(text) {
+  if (typeof text !== "string") return [];
+
+  const fragment = document.createTextNode(text);
+  return [fragment];
+}
+
+/* ======================== PINNED MESSAGES ======================== */
+
+function renderPinnedBar() {
+  const bar = $("pinnedBar");
+  if (!bar) return;
+
+  const pinned = Object.values(S.msgs || {}).find(message =>
+    !message.deleted && (message.pinned_by || []).includes(S.me.id)
+  );
+
+  bar.replaceChildren();
+  if (!pinned) {
+    bar.classList.add("hidden");
+    bar.onclick = null;
+    return;
+  }
+
+  const label = pinned.msg_type === "text"
+    ? `📌 ${pinned.sender.username}: ${pinned.content}`
+    : `📌 Tin nhắn ${pinned.msg_type === "audio" ? "ghi âm" : pinned.msg_type === "image" ? "hình ảnh" : "đa phương tiện"}`;
+  bar.textContent = label;
+  bar.classList.remove("hidden");
+  bar.onclick = () => {
+    const node = $("msgs")?.querySelector(`.msg[data-id="${pinned.id}"]`);
+    node?.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+}
+
+$("searchBtn").onclick = () => {
+  if (!S.current) return;
+  $("messageSearch").classList.remove("hidden");
+  $("messageSearchInput").value = "";
+  $("messageSearchInput").focus();
+};
+
+$("closeSearchBtn").onclick = () => {
+  $("messageSearch").classList.add("hidden");
+  $("messageSearchInput").value = "";
+  openRoom(S.current, true);
+};
+
+$("messageSearchInput").addEventListener("keydown", async event => {
+  if (event.key !== "Enter" || !S.current) return;
+  event.preventDefault();
+  const q = event.target.value.trim();
+  if (!q) return;
+
+  try {
+    const results = await api(`/api/rooms/${S.current.id}/messages/search?q=${encodeURIComponent(q)}&limit=30`);
+    const box = $("msgs");
+    box.replaceChildren(...(results.length
+      ? results.map(message => msgEl(message))
+      : [note("Không tìm thấy tin nhắn nào.")]
+    ), note(`Tìm thấy ${results.length} kết quả cho “${q}”`));
+  } catch (error) {
+    toast(error.message, true);
+  }
+});
+
+function applyTheme(theme) {
+  const dark = theme === "dark";
+  document.body.classList.toggle("dark", dark);
+  $("themeToggle").textContent = dark ? "☀️" : "🌙";
+  $("themeToggle").setAttribute("aria-label", dark ? "Chuyển sang giao diện sáng" : "Chuyển sang giao diện tối");
+  $("themeToggle").title = dark ? "Giao diện sáng" : "Giao diện tối";
+}
+
+applyTheme(localStorage.getItem("realchat-theme") || "light");
+
+$("themeToggle").onclick = () => {
+  const next = document.body.classList.contains("dark") ? "light" : "dark";
+  localStorage.setItem("realchat-theme", next);
+  applyTheme(next);
+};
+
+function showMessageNotification(event) {
+  if (document.hidden && "Notification" in window && Notification.permission === "granted") {
+    new Notification(event.sender.username, {
+      body: event.msg_type === "text" ? event.content : `Đã gửi ${event.msg_type === "audio" ? "tin ghi âm" : event.msg_type}`,
+      tag: event.room_id,
+    });
+  }
+}
+
+async function enableNotifications() {
+  if (!("Notification" in window)) {
+    toast("Trình duyệt không hỗ trợ thông báo desktop", true);
+    return;
+  }
+  if (!window.isSecureContext) {
+    toast("Thông báo cần HTTPS hoặc localhost", true);
+    return;
+  }
+
+  try {
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") {
+      toast("Bạn đã từ chối quyền thông báo", true);
+      return;
+    }
+
+    if ("serviceWorker" in navigator) {
+      await navigator.serviceWorker.register("/sw.js");
+      const registration = await navigator.serviceWorker.ready;
+      const key = await api("/api/push/vapid-public-key");
+      if (key.publicKey) {
+        const existing = await registration.pushManager.getSubscription();
+        const subscription = existing || await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: key.publicKey,
+        });
+        await api("/api/push/subscription", "POST", subscription.toJSON());
+      }
+    }
+
+    $("notifyBtn").textContent = "🔕";
+    $("notifyBtn").title = "Thông báo đã bật";
+    toast("Đã bật thông báo");
+  } catch (error) {
+    toast(error.message || "Không bật được thông báo", true);
+  }
+}
+
+$("notifyBtn").onclick = enableNotifications;
+
+async function restoreSession() {
+  if (!S.token) return;
+
+  try {
+    S.me = await api("/api/auth/me");
+    await start();
+  } catch (error) {
+    if (error.message === "Chưa đăng nhập hoặc token hết hạn") {
+      logout();
+    } else {
+      $("app").classList.add("hidden");
+      $("auth").classList.remove("hidden");
+      $("err").textContent = "Không thể kết nối máy chủ. Tải lại trang để thử lại.";
+    }
+  }
+}
+
+restoreSession();

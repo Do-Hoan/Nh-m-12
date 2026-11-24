@@ -1827,6 +1827,20 @@ body.dark .message-avatar {
   #tiles.n4 {
     grid-template-columns: 1fr 1fr;
   }
+
+  .bubble.media.audio {
+    min-width: 210px;
+  }
+
+  .bubble.media.audio .audio-play {
+    min-width: 82px;
+    padding: 8px 6px;
+    font-size: 12px;
+  }
+
+  .bubble.media.audio audio {
+    min-width: 120px;
+  }
 }
 
 @media (max-width: 480px) {
@@ -1894,41 +1908,31 @@ body.dark .message-avatar {
   border-radius: 10px;
 }
 
-.bubble.media.audio { min-width: 260px; }
-
-.media-duration {
-  display: block;
-  margin-top: 4px;
-  color: var(--muted);
-  font-size: 11px;
-  text-align: right;
-}
-
-.record-panel {
-  position: absolute;
-  left: 120px;
-  right: 24px;
-  bottom: calc(100% - 8px);
-  z-index: 30;
+.bubble.media.audio {
+  min-width: 260px;
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   gap: 8px;
-  min-height: 58px;
-  padding: 8px;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: var(--panel);
-  box-shadow: var(--shadow);
 }
 
-.record-panel audio { flex: 1; min-width: 120px; height: 42px; }
-.record-status { flex: 1; color: var(--text); font-size: 13px; font-weight: 700; }
-.record-panel button { min-width: 64px !important; height: 40px !important; padding: 8px 10px; }
-.record-panel button:first-of-type { background: transparent; color: var(--danger); border-color: var(--danger); }
-.record-panel .record-send { background: var(--accent); color: #fff; }
+.bubble.media.audio .audio-play {
+  width: 100%;
+  height: 42px;
+  min-width: 0;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+  color: var(--text);
+  white-space: nowrap;
+  font-size: 13px;
+}
 
-@media (max-width: 720px) {
-  .bubble.media { width: min(270px, 68vw); }
-  .bubble.media.audio { min-width: 210px; }
-  .record-panel { left: 8px; right: 8px; }
+.bubble.media.audio audio {
+  width: 100%;
+  min-width: 0;
+  height: 42px;
+  margin: 0;
 }
