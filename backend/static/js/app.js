@@ -196,6 +196,7 @@ $("authForm").onsubmit = event => {
 
 $("registerBtn").onclick = () => auth("register");
 $("logoutBtn").onclick = logout;
+$("profileBtn").onclick = openProfile;
 
 function logout() {
   if (typeof endCallLocal === "function") {
@@ -230,6 +231,7 @@ async function start() {
 
   $("auth").classList.add("hidden");
   $("app").classList.remove("hidden");
+  $("profileBtn").onclick = openProfile;
   renderAccountSidebar();
 
   connect();
@@ -1732,8 +1734,14 @@ function renderProfileView() {
   const edit = el("button", {
     type: "button",
     textContent: "Chỉnh sửa hồ sơ",
-    onclick: renderProfileEditor,
   });
+  edit.dataset.action = "edit-profile";
+  edit.onclick = event => {
+    event.preventDefault();
+    event.stopPropagation();
+    renderProfileEditor();
+  };
+
   const joined = el("p", {
     className: "profile-joined",
     textContent: "Tham gia " + joinedLabel,
@@ -1744,19 +1752,24 @@ function renderProfileView() {
 
 function renderProfileEditor() {
   let previewUrl = null;
+
+  const section = el("section", { className: "profile-card" });
+  section.append(profileHeading("Chỉnh sửa hồ sơ", () => {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    closeModal();
+  }));
+
   const avatar = el("div", { className: "profile-large-avatar" });
   updateAvatarElement(avatar, S.me);
-  const fileInput = el("input", {
-    type: "file",
-    accept: IMG_TYPES.join(","),
-    className: "hidden",
-  });
-  const chooseImage = el("button", {
-    type: "button",
-    className: "ghost small",
-    textContent: "Chọn ảnh",
-    onclick: () => fileInput.click(),
-  });
+
+  const fileInput = el("input", { type: "file", accept: IMG_TYPES.join(","), className: "hidden" });
+  const chooseImage = el("button", { type: "button", className: "ghost small", textContent: "Chọn ảnh" });
+  chooseImage.onclick = event => {
+    event.preventDefault();
+    event.stopPropagation();
+    fileInput.click();
+  };
+
   const displayName = el("input", {
     type: "text",
     value: S.me.display_name === S.me.username ? "" : (S.me.display_name || ""),
@@ -1770,45 +1783,33 @@ function renderProfileEditor() {
     rows: 4,
     placeholder: "Viết vài dòng giới thiệu về bạn...",
   });
-  const form = el("form", { className: "profile-form" },
-    profileHeading("Chỉnh sửa hồ sơ", () => {
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-      closeModal();
-    }),
-    el("div", { className: "profile-avatar-editor" },
-      avatar,
-      el("div", {},
-        el("b", { textContent: "Ảnh đại diện" }),
-        el("small", { className: "muted", textContent: "JPG, PNG, GIF hoặc WEBP · tối đa 5MB" }),
-        chooseImage,
-      ),
-      fileInput,
+
+  const avatarEditor = el("div", { className: "profile-avatar-editor" },
+    avatar,
+    el("div", {},
+      el("b", { textContent: "Ảnh đại diện" }),
+      el("small", { className: "muted", textContent: "JPG, PNG, GIF hoặc WEBP · tối đa 5MB" }),
+      chooseImage,
     ),
-    el("label", { className: "profile-field" },
-      el("span", { textContent: "Tên hiển thị" }),
-      displayName,
-    ),
-    el("p", { className: "profile-username" },
-      el("span", { textContent: "Username" }),
-      el("b", { textContent: "@" + S.me.username }),
-    ),
-    el("label", { className: "profile-field" },
-      el("span", { textContent: "Giới thiệu" }),
-      about,
-    ),
-    el("div", { className: "profile-actions" },
-      el("button", {
-        type: "button",
-        className: "ghost",
-        textContent: "Hủy",
-        onclick: () => {
-          if (previewUrl) URL.revokeObjectURL(previewUrl);
-          renderProfileView();
-        },
-      }),
-      el("button", { type: "submit", textContent: "Lưu" }),
-    ),
+    fileInput,
   );
+
+  const form = el("form", { className: "profile-form" },
+    avatarEditor,
+    el("label", { className: "profile-field" }, el("span", { textContent: "Tên hiển thị" }), displayName),
+    el("p", { className: "profile-username" }, el("span", { textContent: "Username" }), el("b", { textContent: "@" + S.me.username })),
+    el("label", { className: "profile-field" }, el("span", { textContent: "Giới thiệu" }), about),
+  );
+
+  const cancel = el("button", { type: "button", className: "ghost", textContent: "Hủy" });
+  cancel.onclick = event => {
+    event.preventDefault();
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    renderProfileView();
+  };
+  const save = el("button", { type: "submit", textContent: "Lưu" });
+  form.append(el("div", { className: "profile-actions" }, cancel, save));
+  section.append(form);
 
   fileInput.onchange = () => {
     const file = fileInput.files[0];
@@ -1830,7 +1831,6 @@ function renderProfileEditor() {
 
   form.onsubmit = async event => {
     event.preventDefault();
-    const save = form.querySelector('button[type="submit"]');
     save.disabled = true;
     save.textContent = "Đang lưu...";
 
@@ -1856,10 +1856,13 @@ function renderProfileEditor() {
       }
 
       S.me = await api("/api/auth/me", "PATCH", updates);
-      if (S.me.avatar_url) {
-        updateAvatarElement($("meAvatar"), S.me);
+      updateAvatarElement($("meAvatar"), S.me);
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl);
+        previewUrl = null;
       }
       closeModal();
+      renderAccountSidebar();
       toast("Cập nhật hồ sơ thành công");
     } catch (error) {
       toast(error.message, true);
@@ -1868,6 +1871,12 @@ function renderProfileEditor() {
       save.textContent = "Lưu";
     }
   };
+
+  openModal(section);
+  $("dialog").classList.add("profile-dialog");
+  $("dialog").setAttribute("role", "dialog");
+  $("dialog").setAttribute("aria-modal", "true");
+  $("dialog").setAttribute("aria-labelledby", "profileTitle");
 }
 
 function renderMentionParts(text) {
@@ -2020,3 +2029,8 @@ async function restoreSession() {
 }
 
 restoreSession();
+
+document.addEventListener("click", event => {
+  if (event.target.closest("#profileBtn")) openProfile();
+  if (event.target.closest("button[data-action='edit-profile']")) renderProfileEditor();
+});
