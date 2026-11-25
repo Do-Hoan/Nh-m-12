@@ -141,6 +141,17 @@ def test_group_call_limit(client, make_user, monkeypatch):
         assert drain_until(wa, "pong")
 
 
+def test_general_room_cannot_start_call(client, make_user):
+    user = make_user("anh")
+    general = client.get("/api/rooms", headers=user["h"]).json()[0]
+    assert general["is_default"] is True
+
+    with client.websocket_connect(ws_url(user)) as ws:
+        ws.send_json({"type": "call.invite", "room_id": general["id"], "media": "audio"})
+        error = drain_until(ws, "error")
+        assert error["code"] == "CALL_NOT_ALLOWED"
+
+
 def test_call_logs_written(client, make_user):
     import asyncio
     from app.db import db

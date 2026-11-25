@@ -83,6 +83,8 @@ class CallManager:
     async def invite(self, user: dict, ws: WebSocket, room: dict, media: str) -> None:
         uid = str(user["_id"])
         room_id = str(room["_id"])
+        if room["type"] == "group" and room.get("is_default"):
+            return await self._err(ws, "CALL_NOT_ALLOWED", "Phòng general không hỗ trợ cuộc gọi")
         if media not in ("audio", "video"):
             return await self._err(ws, "BAD_REQUEST", "media phải là 'audio' hoặc 'video'")
         if self.busy(uid):

@@ -698,6 +698,185 @@ async function openDM(userId) {
   }
 }
 
+function dialogHeading(title) {
+  const close = el("button", {
+    type: "button",
+    className: "icon",
+    textContent: "×",
+    title: "Đóng",
+    onclick: closeModal,
+  });
+  close.setAttribute("aria-label", "Đóng");
+  return el("div", { className: "profile-heading" }, el("h3", { textContent: title }), close);
+}
+
+function showGroupDialog(content, title) {
+  openModal(content);
+  $("dialog").classList.add("profile-dialog");
+  $("dialog").setAttribute("role", "dialog");
+  $("dialog").setAttribute("aria-modal", "true");
+  $("dialog").setAttribute("aria-labelledby", "groupDialogTitle");
+  const heading = content.querySelector("h3");
+  if (heading) heading.id = "groupDialogTitle";
+}
+
+function openCreateGroup() {
+  const form = el("form", { className: "profile-form" });
+  form.append(dialogHeading("Tạo nhóm mới"));
+
+  const name = el("input", {
+    type: "text",
+    minLength: 2,
+    maxLength: 40,
+    required: true,
+    placeholder: "Tên nhóm",
+  });
+  form.append(el("label", { className: "profile-field" }, el("span", { textContent: "Tên nhóm" }), name));
+  form.append(el("p", { className: "muted", textContent: "Chọn ít nhất một thành viên khác." }));
+
+  const checklist = el("div", { className: "checklist" });
+  for (const user of S.users) {
+    const checkbox = el("input", { type: "checkbox", value: user.id });
+    const label = el("label", {}, checkbox, el("span", {
+      textContent: user.display_name && user.display_name !== user.username
+        ? `${user.display_name} (@${user.username})`
+        : user.username,
+    }));
+    checklist.append(label);
+  }
+  if (!S.users.length) checklist.append(note("Chưa có người dùng khác để thêm vào nhóm."));
+  form.append(checklist);
+
+  const cancel = el("button", { type: "button", className: "ghost", textContent: "Hủy", onclick: closeModal });
+  const submit = el("button", { type: "submit", textContent: "Tạo nhóm" });
+  form.append(el("div", { className: "profile-actions" }, cancel, submit));
+  showGroupDialog(form, "Tạo nhóm mới");
+  name.focus();
+
+  form.onsubmit = async event => {
+    event.preventDefault();
+    const member_ids = [...checklist.querySelectorAll("input:checked")].map(input => input.value);
+    if (member_ids.length === 0) {
+      toast("Hãy chọn ít nhất một thành viên khác", true);
+      return;
+    }
+    submit.disabled = true;
+    submit.textContent = "Đang tạo...";
+    try {
+      const room = await api("/api/rooms/group", "POST", {
+        name: name.value.trim(),
+        member_ids,
+      });
+      upsertRoom(room);
+      closeModal();
+      await openRoom(room);
+      toast("Đã tạo nhóm");
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      submit.disabled = false;
+      submit.textContent = "Tạo nhóm";
+    }
+  };
+}
+
+function openGroupManager() {
+  const room = S.current;
+  if (!room || room.type !== "group") return;
+
+  const isOwner = room.created_by === S.me.id && !room.is_default;
+  const section = el("section", { className: "profile-card" });
+  section.append(dialogHeading("Quản lý nhóm"));
+  section.append(el("p", { className: "profile-joined", textContent: `${room.name} · ${room.members.length} thành viên` }));
+
+  const memberList = el("div", { className: "checklist" });
+  for (const member of room.members) {
+    const label = el("span", {
+      textContent: `${member.display_name || member.username} (@${member.username})${member.id === room.created_by ? " · Người tạo" : ""}`,
+    });
+    const row = el("div", { className: "memberRow" }, label);
+    if (isOwner && member.id !== S.me.id) {
+      const remove = el("button", { type: "button", className: "ghost small", textContent: "Xóa" });
+      remove.onclick = async () => {
+        remove.disabled = true;
+        try {
+          const updated = await api(`/api/rooms/${room.id}/members/${member.id}`, "DELETE");
+          upsertRoom(updated);
+          openGroupManager();
+        } catch (error) {
+          toast(error.message, true);
+          remove.disabled = false;
+        }
+      };
+      row.append(remove);
+    }
+    memberList.append(row);
+  }
+  section.append(memberList);
+
+  if (isOwner) {
+    const existing = new Set(room.members.map(member => member.id));
+    const available = S.users.filter(user => !existing.has(user.id));
+    section.append(el("h4", { textContent: "Thêm thành viên" }));
+    const form = el("form", { className: "profile-form" });
+    const checklist = el("div", { className: "checklist" });
+    for (const user of available) {
+      const checkbox = el("input", { type: "checkbox", value: user.id });
+      checklist.append(el("label", {}, checkbox, el("span", {
+        textContent: user.display_name && user.display_name !== user.username
+          ? `${user.display_name} (@${user.username})`
+          : user.username,
+      })));
+    }
+    if (!available.length) checklist.append(note("Không còn người dùng nào để thêm."));
+    form.append(checklist);
+    const add = el("button", { type: "submit", textContent: "Thêm đã chọn", disabled: !available.length });
+    form.append(el("div", { className: "profile-actions" }, add));
+    form.onsubmit = async event => {
+      event.preventDefault();
+      const user_ids = [...checklist.querySelectorAll("input:checked")].map(input => input.value);
+      if (!user_ids.length) {
+        toast("Hãy chọn ít nhất một người dùng", true);
+        return;
+      }
+      add.disabled = true;
+      try {
+        const updated = await api(`/api/rooms/${room.id}/members`, "POST", { user_ids });
+        upsertRoom(updated);
+        openGroupManager();
+      } catch (error) {
+        toast(error.message, true);
+        add.disabled = false;
+      }
+    };
+    section.append(form);
+  }
+
+  if (!room.is_default) {
+    const leave = el("button", { type: "button", className: "ghost", textContent: "Rời nhóm" });
+    leave.onclick = async () => {
+      leave.disabled = true;
+      try {
+        await api(`/api/rooms/${room.id}/leave`, "POST");
+        S.rooms = S.rooms.filter(item => item.id !== room.id);
+        closeModal();
+        closeChat();
+        renderSidebar();
+        toast("Bạn đã rời nhóm");
+      } catch (error) {
+        toast(error.message, true);
+        leave.disabled = false;
+      }
+    };
+    section.append(leave);
+  }
+
+  showGroupDialog(section, "Quản lý nhóm");
+}
+
+$("newGroupBtn").onclick = openCreateGroup;
+$("manageBtn").onclick = openGroupManager;
+
 /* ======================== CHAT HEADER ======================== */
 
 function renderHeader() {
@@ -728,8 +907,10 @@ function renderHeader() {
   );
 
   const status = S.callStatus[room.id];
+  const callAllowed = room.type !== "group" || !room.is_default;
 
   const joinable =
+    callAllowed &&
     room.type === "group" &&
     status &&
     status.call_id &&
@@ -747,12 +928,12 @@ function renderHeader() {
 
   $("voiceBtn").classList.toggle(
     "hidden",
-    joinable
+    !callAllowed || joinable
   );
 
   $("videoBtn").classList.toggle(
     "hidden",
-    joinable
+    !callAllowed || joinable
   );
 }
 
